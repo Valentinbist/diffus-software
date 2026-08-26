@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+  {% if ov.token %}
+    <p><strong>Connected</strong> &mdash; IG user id: {{ ov.token.ig_user_id or "unknown" }}</p>
+    <p class="muted">
+      Token expires {{ ov.token.expires_at.strftime("%Y-%m-%d") }}
+      ({{ (ov.token.expires_at - now).days }} days left)
+    </p>
+  {% else %}
+    <p><a href="/oauth/login">Connect Instagram</a></p>
+  {% endif %}
+</div>
+
+<form class="inline" method="post" action="/sync">
+  <button type="submit">Sync now</button>
+</form>
+
+<table>
+  <thead>
+    <tr>
+      <th>Posted</th>
+      <th>Caption</th>
+      <th>Media</th>
+      <th>Deliveries</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for view in ov.posts %}
+    <tr>
+      <td>
+        <a href="{{ view.post.permalink }}" target="_blank" rel="noopener">
+          {{ view.post.posted_at.strftime("%Y-%m-%d %H:%M") }}
+        </a>
+      </td>
+      <td>
+        {% set caption = view.post.caption or "" %}
+        {{ caption[:80] }}{% if caption|length > 80 %}&hellip;{% endif %}
+      </td>
+      <td>{{ view.post.media|length }}</td>
+      <td>
+        <div class="delivery-row">
+        {% for d in view.deliveries %}
+          <span class="badge badge-{{ d.status.value }}"
+                {% if d.error %}title="{{ d.error }}"{% endif %}>
+            {{ d.chat_id }}: {{ d.status.value }} ({{ d.attempts }})
+          </span>
+          {% if d.status.value != "sent" %}
+          <form class="inline" method="post" action="/resend">
+            <input type="hidden" name="post_id" value="{{ view.post.id }}">
+            <input type="hidden" name="chat_id" value="{{ d.chat_id }}">
+            <button type="submit">resend</button>
+          </form>
+          {% endif %}
+        {% endfor %}
+        </div>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="muted">No posts synced yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -15,39 +15,50 @@ management. Postgres from the start. Signal comes later.
 | Topology | **One process**: poller as asyncio task in FastAPI `lifespan`, `uvicorn --workers 1` (pinned, commented) | One sink doesn't need workers. Split poller out when Signal arrives. |
 | Queue/broker | None | Postgres is enough at this scale |
 | Media | Download to tempfile → upload to Telegram → delete | IG CDN URLs are short-lived; don't pass them to Telegram |
-| Routing | `config.toml` (`ig_account → [chat_id]`), not the DB | Edited twice a year, no CRUD needed |
+| Routing | `TELEGRAM_CHAT_IDS` env var (comma-separated chat ids), not the DB | Edited twice a year, no CRUD needed |
 | UI | Jinja + HTMX served by FastAPI | No build step; SPA only if ever needed |
 | Auth | `HTTPBasic` + `secrets.compare_digest`, creds from env | Needs TLS in front (Caddy/tunnel) — required anyway: OAuth redirect URI must be public HTTPS |
 
-## Schema (4 tables)
+## Schema (3 tables, single account)
 
 ```sql
-tokens      (id=1 singleton, access_token, expires_at, refreshed_at)
-accounts    (ig_user_id, username, last_polled_at, bootstrapped)
-posts       (id PK, ig_user_id, permalink, caption, media_json, posted_at, fetched_at)
-deliveries  (post_id, chat_id, status, attempts, next_attempt_at, sent_at, error)
-             UNIQUE(post_id, chat_id)
+tokens      (id=1 singleton, access_token, ig_user_id, expires_at, refreshed_at)
+posts       (id PK, caption, permalink, media JSONB, posted_at, fetched_at)
+deliveries  (post_id, chat_id, status, attempts, sent_at, error)
+             PRIMARY KEY (post_id, chat_id)
 ```
+
+No `accounts` table: v1 targets exactly one Instagram account (Business Login
+for Instagram), so there is nothing to key it against — `tokens` is a
+singleton row. Fan-out to multiple Telegram chats is env-configured routing,
+not a DB relationship. Retries are attempt-counted (`attempts`, capped at 5),
+not scheduled — there is no `next_attempt_at`; a failed delivery is simply
+retried on every poll cycle until the cap is hit.
 
 ## Layout
 
 ```text
 src/connector/
-  domain.py           # Post, MediaItem, DeliveryResult
-  config.py           # pydantic-settings + config.toml routing
-  db/                 # models, session
-  sources/instagram.py  # Graph client, token exchange + refresh
-  sinks/telegram.py
-  render/telegram.py  # HTML, 1024-char caption cap, sendMediaGroup for carousels
-  media.py            # download to tempfile
-  pipeline.py         # poll → persist → dedupe → send → mark
-  api/                # main (lifespan poller), auth, routes, templates/
+  config.py                     # pydantic-settings, env-only (no config.toml)
+  domain/                       # entities, ports (protocols), errors — stdlib only
+  application/                  # use cases: sync_posts, connect_instagram,
+                                 #   refresh_token, resend_delivery, overview
+  infrastructure/
+    db/                         # SQLAlchemy models, session, repositories
+    instagram/                  # Graph client: PostSource + AuthGateway
+    telegram/                   # render (HTML captions) + sink (PostSink)
+    media/                      # CDN download to tempdir
+  presentation/
+    app.py                      # composition root: FastAPI lifespan builds
+                                 #   the object graph, starts the APScheduler jobs
+    routes.py, auth.py          # HTTP Basic auth on every route
+    templates/                  # Jinja, no build step, no external assets
 alembic/
-docker-compose.yml    # app + postgres + caddy
-config.toml
+docker-compose.yml    # app + postgres
 ```
 
-Keep `SourceAdapter`/`SinkAdapter` protocols so Signal is a new module, not a redesign.
+Keep `PostSource`/`PostSink`/`AuthGateway` protocols (`domain/ports.py`) so
+Signal is a new `infrastructure/` adapter, not a redesign.
 
 ## Build order
 
