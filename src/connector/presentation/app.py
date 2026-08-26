@@ -1,0 +1,112 @@
+"""Composition root: builds the object graph and wires the FastAPI app + scheduler."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
+import httpx
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from fastapi import FastAPI
+
+from connector.application.connect_instagram import ConnectInstagram
+from connector.application.overview import GetOverview
+from connector.application.refresh_token import EnsureFreshToken
+from connector.application.resend_delivery import ResendDelivery
+from connector.application.sync_posts import SyncPosts
+from connector.config import get_settings
+from connector.domain.errors import NotConnectedError
+from connector.infrastructure.db.repositories import (
+    SqlDeliveryRepository,
+    SqlPostRepository,
+    SqlTokenRepository,
+)
+from connector.infrastructure.db.session import make_engine, make_session_factory
+from connector.infrastructure.instagram.client import InstagramClient
+from connector.infrastructure.media.downloader import HttpMediaGateway
+from connector.infrastructure.telegram.sink import TelegramSink
+from connector.presentation.routes import router
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Composition root: get_settings() is only ever called here (or in request-scoped
+    # dependencies), never at import time, so `import connector.presentation.app`
+    # works without a .env file present.
+    settings = get_settings()
+
+    engine = make_engine(settings.database_url)
+    session_factory = make_session_factory(engine)
+    http = httpx.AsyncClient(timeout=30)
+
+    posts = SqlPostRepository(session_factory)
+    deliveries = SqlDeliveryRepository(session_factory)
+    tokens = SqlTokenRepository(session_factory)
+
+    instagram = InstagramClient(http, settings, tokens)
+    telegram = TelegramSink(http, settings.telegram_bot_token)
+    media = HttpMediaGateway(http)
+
+    sync = SyncPosts(
+        source=instagram,
+        posts=posts,
+        deliveries=deliveries,
+        media=media,
+        sink=telegram,
+        chat_ids=settings.chat_ids,
+    )
+    connect = ConnectInstagram(auth=instagram, tokens=tokens)
+    refresh = EnsureFreshToken(auth=instagram, tokens=tokens)
+    resend = ResendDelivery(posts=posts, deliveries=deliveries, media=media, sink=telegram)
+    overview = GetOverview(tokens=tokens, posts=posts, deliveries=deliveries)
+
+    sync_lock = asyncio.Lock()
+
+    app.state.sync = sync
+    app.state.connect = connect
+    app.state.refresh = refresh
+    app.state.resend = resend
+    app.state.overview = overview
+    app.state.sync_lock = sync_lock
+
+    async def run_sync_job() -> None:
+        async with sync_lock:
+            try:
+                report = await sync.run()
+                logger.info("sync complete: %s", report)
+            except NotConnectedError:
+                logger.info("Instagram not connected, skipping sync")
+            except Exception:  # noqa: BLE001 - scheduler job must never crash the loop
+                logger.exception("sync job failed")
+
+    async def run_refresh_job() -> None:
+        try:
+            await refresh.run()
+        except Exception:  # noqa: BLE001 - scheduler job must never crash the loop
+            logger.exception("token refresh FAILED - manual intervention required")
+
+    scheduler = AsyncIOScheduler(timezone="utc")
+    scheduler.add_job(run_sync_job, "interval", minutes=settings.poll_interval_minutes)
+    scheduler.add_job(run_refresh_job, "interval", hours=24)
+    scheduler.start()
+
+    try:
+        yield
+    finally:
+        scheduler.shutdown(wait=False)
+        await http.aclose()
+        await engine.dispose()
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
+    app.include_router(router)
+    return app
+
+
+app = create_app()

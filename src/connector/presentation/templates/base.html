@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Instagram → Telegram{% endblock %}</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      max-width: 960px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+      line-height: 1.5;
+    }
+    h1 { font-size: 1.4rem; margin-bottom: 1.25rem; }
+    .card {
+      border: 1px solid rgba(128, 128, 128, 0.35);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+    th, td {
+      text-align: left;
+      padding: 0.5rem;
+      border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+      vertical-align: top;
+    }
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      margin: 0.15rem 0.15rem 0.15rem 0;
+    }
+    .badge-sent { background: rgba(22, 163, 74, 0.18); color: #16a34a; }
+    .badge-failed { background: rgba(220, 38, 38, 0.18); color: #dc2626; }
+    .badge-pending { background: rgba(234, 179, 8, 0.18); color: #a16207; }
+    .badge-skipped { background: rgba(107, 114, 128, 0.18); color: #6b7280; }
+    button {
+      cursor: pointer;
+      border: 1px solid rgba(128, 128, 128, 0.4);
+      border-radius: 6px;
+      padding: 0.3rem 0.75rem;
+      background: transparent;
+      font: inherit;
+      color: inherit;
+    }
+    form.inline { display: inline-block; margin: 0.15rem 0; }
+    .muted { color: #888; }
+    a { color: inherit; }
+    .delivery-row { display: flex; align-items: center; flex-wrap: wrap; gap: 0.25rem; }
+  </style>
+</head>
+<body>
+  <h1>Instagram → Telegram</h1>
+  {% block content %}{% endblock %}
+</body>
+</html>
