@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from connector.application.sync_posts import SyncPosts
 from connector.domain.entities import DeliveryStatus, MediaItem, MediaType, Post
@@ -13,7 +13,7 @@ def make_post(post_id: str, minute: int = 0) -> Post:
         caption="caption",
         permalink=f"https://instagram.com/p/{post_id}/",
         media=(MediaItem(url=f"https://cdn.example.com/{post_id}.jpg", type=MediaType.IMAGE),),
-        posted_at=datetime(2024, 1, 1, 12, minute, tzinfo=timezone.utc),
+        posted_at=datetime(2024, 1, 1, 12, minute, tzinfo=UTC),
     )
 
 

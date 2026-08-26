@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
 import httpx
@@ -21,7 +21,9 @@ MEDIA_FIELDS = (
 
 
 class InstagramClient:
-    def __init__(self, http: httpx.AsyncClient, settings: Settings, tokens: TokenRepository) -> None:
+    def __init__(
+        self, http: httpx.AsyncClient, settings: Settings, tokens: TokenRepository
+    ) -> None:
         self.http = http
         self.settings = settings
         self.tokens = tokens
@@ -67,7 +69,7 @@ class InstagramClient:
         exchange_resp.raise_for_status()
         exchange_payload = exchange_resp.json()
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expires_in = exchange_payload.get("expires_in", DEFAULT_EXPIRES_IN)
         return Token(
             access_token=exchange_payload["access_token"],
@@ -84,7 +86,7 @@ class InstagramClient:
         resp.raise_for_status()
         payload = resp.json()
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expires_in = payload.get("expires_in", DEFAULT_EXPIRES_IN)
         return Token(
             access_token=payload["access_token"],

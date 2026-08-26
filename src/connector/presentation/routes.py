@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import contextlib
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, Request
@@ -21,26 +22,22 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 async def index(request: Request):
     overview = await request.app.state.overview.run()
     return templates.TemplateResponse(
-        request, "index.html", {"ov": overview, "now": datetime.now(timezone.utc)}
+        request, "index.html", {"ov": overview, "now": datetime.now(UTC)}
     )
 
 
 @router.post("/sync")
 async def sync_now(request: Request):
     async with request.app.state.sync_lock:
-        try:
+        with contextlib.suppress(NotConnectedError):
             await request.app.state.sync.run()
-        except NotConnectedError:
-            pass
     return RedirectResponse("/", status_code=303)
 
 
 @router.post("/resend")
 async def resend(request: Request, post_id: str = Form(...), chat_id: str = Form(...)):
-    try:
+    with contextlib.suppress(ConnectorError):
         await request.app.state.resend.run(post_id, chat_id)
-    except ConnectorError:
-        pass
     return RedirectResponse("/", status_code=303)
 
 

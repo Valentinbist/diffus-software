@@ -6,8 +6,8 @@ are not unit-of-work objects, the use cases call them one at a time.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -104,9 +104,12 @@ class SqlDeliveryRepository:
                     attempts=0,
                 )
                 .on_conflict_do_nothing(index_elements=[DeliveryRow.post_id, DeliveryRow.chat_id])
+                # RETURNING yields a row only when the insert actually happened,
+                # so "did we just claim this?" is answered without touching rowcount.
+                .returning(DeliveryRow.post_id)
             )
-            result = await s.execute(stmt)
-            if result.rowcount:
+            inserted = (await s.execute(stmt)).scalar_one_or_none()
+            if inserted is not None:
                 return True
 
             row = await s.get(DeliveryRow, (post_id, chat_id))
@@ -131,7 +134,7 @@ class SqlDeliveryRepository:
 
             row.status = status.value
             if status == DeliveryStatus.SENT:
-                row.sent_at = datetime.now(timezone.utc)
+                row.sent_at = datetime.now(UTC)
                 row.error = None
             elif status == DeliveryStatus.FAILED:
                 row.attempts += 1

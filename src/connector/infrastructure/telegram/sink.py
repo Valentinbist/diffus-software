@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import IO
 
 import httpx
 
@@ -22,7 +24,7 @@ REQUEST_TIMEOUT = 120.0
 MAX_RETRIES = 3
 MAX_ERROR_BODY_LENGTH = 500
 
-FilesFactory = Callable[[], dict[str, tuple[str, object]]]
+FilesFactory = Callable[[], dict[str, tuple[str, IO[bytes]]]]
 
 
 class TelegramSink:
@@ -35,7 +37,7 @@ class TelegramSink:
             raise DeliveryError("no media to deliver")
 
         caption = render_caption(post)
-        items = list(zip(post.media, media_paths))
+        items = list(zip(post.media, media_paths, strict=True))
 
         if len(items) == 1:
             media_item, path = items[0]
@@ -63,7 +65,10 @@ class TelegramSink:
             media_descriptor.append(entry)
 
         def make_files(items: list = items) -> dict:
-            return {f"m{i}": (path.name, path.open("rb")) for i, (_media_item, path) in enumerate(items)}
+            return {
+                f"m{i}": (path.name, path.open("rb"))
+                for i, (_media_item, path) in enumerate(items)
+            }
 
         data = {"chat_id": chat_id, "media": json.dumps(media_descriptor)}
         await self._call("sendMediaGroup", data=data, make_files=make_files)
@@ -83,10 +88,9 @@ class TelegramSink:
 
             if resp.status_code == 429:
                 retry_after = 1
-                try:
+                # Fall back to the default backoff if the 429 body isn't parseable.
+                with contextlib.suppress(Exception):
                     retry_after = resp.json().get("parameters", {}).get("retry_after", 1)
-                except Exception:  # noqa: BLE001 - fall back to default backoff
-                    pass
                 logger.warning(
                     "telegram rate limited on %s (attempt %s/%s), sleeping %ss",
                     method,

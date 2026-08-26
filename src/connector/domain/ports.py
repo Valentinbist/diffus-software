@@ -6,9 +6,10 @@ depends only on these abstractions, never on concrete infrastructure.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
-from typing import Protocol, Sequence
+from typing import Protocol
 
 from connector.domain.entities import Delivery, DeliveryStatus, Post, Token
 

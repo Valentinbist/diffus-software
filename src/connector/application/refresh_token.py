@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from connector.domain.entities import Token
 from connector.domain.ports import AuthGateway, TokenRepository
@@ -22,7 +22,7 @@ class EnsureFreshToken:
         if token is None:
             return None
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         needs_refresh = (
             now - token.refreshed_at >= timedelta(days=REFRESH_AFTER_DAYS)
             or token.expires_at - now <= timedelta(days=REFRESH_WITHIN_EXPIRY_DAYS)

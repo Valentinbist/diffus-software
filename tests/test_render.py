@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from connector.domain.entities import MediaItem, MediaType, Post
 from connector.infrastructure.telegram.render import MAX_CAPTION_LENGTH, render_caption
@@ -12,7 +12,7 @@ def make_post(caption: str | None) -> Post:
         caption=caption,
         permalink="https://instagram.com/p/ABC123/",
         media=(MediaItem(url="https://cdn.example.com/1.jpg", type=MediaType.IMAGE),),
-        posted_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        posted_at=datetime(2024, 1, 1, tzinfo=UTC),
     )
 
 

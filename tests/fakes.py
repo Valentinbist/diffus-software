@@ -8,10 +8,10 @@ provides.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Sequence
 
 from connector.domain.entities import Delivery, DeliveryStatus, Post
 
@@ -74,7 +74,7 @@ class FakeDeliveries:
 
         row.status = status
         if status == DeliveryStatus.SENT:
-            row.sent_at = datetime.now(timezone.utc)
+            row.sent_at = datetime.now(UTC)
             row.error = None
         elif status == DeliveryStatus.FAILED:
             row.attempts += 1

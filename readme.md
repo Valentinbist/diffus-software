@@ -26,12 +26,14 @@ delivered normally.
 
 ## Dev setup
 
-```sh
-pip install -e ".[dev]"
-pytest
-```
+Python 3.14 + [uv](https://docs.astral.sh/uv/):
 
-Tests run against in-memory fakes (no DB, no network required).
+```sh
+uv sync            # creates .venv, installs everything incl. dev tools
+uv run pytest      # tests run against in-memory fakes (no DB, no network)
+uv run ruff check .
+uv run ty check
+```
 
 ## Layers
 
