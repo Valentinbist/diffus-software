@@ -1,0 +1,28 @@
+# Automatic Let's Encrypt on first request for {$APP_DOMAIN}. This is what makes
+# IG_REDIRECT_URI a valid public HTTPS URL, and what stops Basic auth from going
+# over the wire in cleartext.
+
+{$APP_DOMAIN} {
+	encode zstd gzip
+
+	# Uploading a video to Telegram can hold a request open for a while; the
+	# app's own Telegram timeout is 120s, so give it room above that.
+	reverse_proxy app:8000 {
+		transport http {
+			read_timeout 180s
+			write_timeout 180s
+		}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

@@ -1,4 +1,4 @@
-"""HTTP routes. Every route requires HTTP Basic auth via the router-level dependency."""
+"""HTTP routes. Every route requires HTTP Basic auth except /healthz."""
 
 from __future__ import annotations
 
@@ -10,12 +10,21 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from connector.domain.errors import ConnectorError, NotConnectedError
+from connector.domain.errors import ConnectorError
 from connector.presentation.auth import require_auth
 
 router = APIRouter(dependencies=[Depends(require_auth)])
 
+# Unauthenticated on purpose: container and uptime probes can't carry Basic auth
+# credentials. It reports liveness only — never connection or delivery state.
+health_router = APIRouter()
+
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+
+@health_router.get("/healthz")
+async def healthz():
+    return {"status": "ok"}
 
 
 @router.get("/")
@@ -28,9 +37,8 @@ async def index(request: Request):
 
 @router.post("/sync")
 async def sync_now(request: Request):
-    async with request.app.state.sync_lock:
-        with contextlib.suppress(NotConnectedError):
-            await request.app.state.sync.run()
+    # Same job the scheduler runs, so a manual sync also heals a stale token.
+    await request.app.state.sync_job.run()
     return RedirectResponse("/", status_code=303)
 
 

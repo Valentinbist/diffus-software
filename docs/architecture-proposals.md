@@ -50,11 +50,13 @@ src/connector/
     media/                      # CDN download to tempdir
   presentation/
     app.py                      # composition root: FastAPI lifespan builds
-                                 #   the object graph, starts the APScheduler jobs
-    routes.py, auth.py          # HTTP Basic auth on every route
+                                 #   the object graph, starts the scheduler
+    jobs.py                     # SyncJob: refresh token, then sync (one timer)
+    routes.py, auth.py          # HTTP Basic auth on every route except /healthz
     templates/                  # Jinja, no build step, no external assets
 alembic/
-docker-compose.yml    # app + postgres
+docker-compose.yml    # app + postgres (dev; production stack lives in infra/)
+infra/                # ansible host config + production compose
 ```
 
 Keep `PostSource`/`PostSink`/`AuthGateway` protocols (`domain/ports.py`) so
@@ -73,5 +75,9 @@ Signal is a new `infrastructure/` adapter, not a redesign.
 ## Sharp edges
 
 - Telegram: 1024-char caption cap (truncate + permalink), ~20 msg/min per group, media group max 10
-- Token refresh failure must page you, not log quietly
+- Token refresh must run on a timer shorter than the process lifetime. It was
+  its own 24h APScheduler job, and since an interval trigger first fires one
+  interval after start, a host restarting daily never ran it — the token then
+  expired silently at day 60. It now rides the sync cadence (`presentation/jobs.py`).
+- Token refresh failure must page you, not log quietly (still only logs)
 - Signal (later): dedicated phone number + `signal-cli`, attachments as bytes not URLs

@@ -1,5 +1,6 @@
 .env
 .venv/
+infra/ansible/inventory.ini
 __pycache__/
 *.pyc
 .pytest_cache/

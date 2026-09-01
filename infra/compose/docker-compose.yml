@@ -1,0 +1,57 @@
+# Production stack. Shipped to /opt/connector by the deploy workflow — do not
+# edit this on the host, edit it here and push.
+#
+# Differs from the repo-root docker-compose.yml (which builds locally for dev):
+# the app image comes from GHCR by digest-pinned tag, and nothing but Caddy
+# binds a host port.
+
+services:
+  app:
+    image: ${APP_IMAGE:?set APP_IMAGE}
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://connector:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/connector
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: connector
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: connector
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U connector"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?set APP_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  caddy_data: # holds the Let's Encrypt account + certs; losing it means re-issuing
+  caddy_config:

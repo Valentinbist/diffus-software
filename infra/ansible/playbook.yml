@@ -1,0 +1,250 @@
+---
+# Declarative host config for the connector box. Idempotent: run it as often as
+# you like. This is the only thing that should ever change the host — if you
+# find yourself editing a file over SSH, add a task here instead and re-run.
+#
+#   first run (fresh box):  ansible-playbook playbook.yml   # ansible_user=root
+#   every run after:        ansible-playbook playbook.yml   # ansible_user=deploy
+#
+# Deliberately NOT here: the app, its image, its .env. Those belong to the
+# GitHub Actions pipeline, which only ever needs this box to have Docker, a
+# deploy user, and /opt/connector.
+
+- name: Configure the connector host
+  hosts: connector
+  become: true
+
+  vars:
+    deploy_user: deploy
+    app_dir: /opt/connector
+    backup_retention_days: 14
+
+  pre_tasks:
+    - name: Refuse to run without authorised keys
+      # Without this the sshd hardening below locks everyone out of a box that
+      # has no key installed, and Strato has no API to undo it with.
+      ansible.builtin.assert:
+        that:
+          - ssh_public_keys is defined
+          - ssh_public_keys | length > 0
+        fail_msg: >-
+          ssh_public_keys is empty. Set it in the inventory before running, or
+          this playbook will disable password auth on a box you cannot log into.
+
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+  tasks:
+    - name: Install base packages
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - ufw
+          - fail2ban
+          - unattended-upgrades
+          - apt-listchanges
+        state: present
+
+    # --- user -------------------------------------------------------------
+    # Before the sshd hardening, always. Order is load-bearing.
+
+    - name: Create the deploy user
+      ansible.builtin.user:
+        name: "{{ deploy_user }}"
+        shell: /bin/bash
+        create_home: true
+
+    - name: Authorise SSH keys for the deploy user
+      ansible.posix.authorized_key:
+        user: "{{ deploy_user }}"
+        key: "{{ ssh_public_keys | join('\n') }}"
+        exclusive: true
+
+    - name: Grant passwordless sudo to the deploy user
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/90-{{ deploy_user }}
+        content: "{{ deploy_user }} ALL=(ALL) NOPASSWD:ALL\n"
+        mode: "0440"
+        validate: visudo -cf %s
+
+    # --- docker -----------------------------------------------------------
+
+    - name: Add the Docker apt key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/debian/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+
+    - name: Add the Docker apt repository
+      # Debian's own docker.io package ships no compose v2 plugin, which the
+      # deploy pipeline depends on.
+      ansible.builtin.deb822_repository:
+        name: docker
+        types: [deb]
+        uris: https://download.docker.com/linux/debian
+        suites: "{{ ansible_distribution_release }}"
+        components: [stable]
+        architectures:
+          - "{{ ansible_architecture | replace('x86_64', 'amd64') | replace('aarch64', 'arm64') }}"
+        signed_by: /etc/apt/keyrings/docker.asc
+        state: present
+
+    - name: Install Docker
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+        update_cache: true
+
+    - name: Start Docker on boot
+      ansible.builtin.service:
+        name: docker
+        enabled: true
+        state: started
+
+    - name: Put the deploy user in the docker group
+      ansible.builtin.user:
+        name: "{{ deploy_user }}"
+        groups: docker
+        append: true
+
+    # --- firewall ---------------------------------------------------------
+    # Caveat: Docker writes its own iptables rules and published container
+    # ports bypass ufw entirely. This protects the host's own services; what
+    # keeps Postgres private is that compose never publishes its port.
+
+    - name: Default-deny inbound
+      community.general.ufw:
+        direction: incoming
+        policy: deny
+
+    - name: Default-allow outbound
+      community.general.ufw:
+        direction: outgoing
+        policy: allow
+
+    - name: Allow SSH, HTTP and HTTPS
+      community.general.ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop: ["22", "80", "443"]
+
+    - name: Enable ufw
+      community.general.ufw:
+        state: enabled
+
+    # --- hardening --------------------------------------------------------
+
+    - name: Disable password auth and root login
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/99-hardening.conf
+        content: |
+          PasswordAuthentication no
+          PermitRootLogin no
+          KbdInteractiveAuthentication no
+        mode: "0644"
+        validate: sshd -t -f %s
+      notify: Restart sshd
+
+    - name: Enable unattended security upgrades
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+        mode: "0644"
+
+    - name: Reboot automatically for kernel updates
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/51unattended-upgrades-reboot
+        content: |
+          Unattended-Upgrade::Automatic-Reboot "true";
+          Unattended-Upgrade::Automatic-Reboot-Time "04:30";
+        mode: "0644"
+
+    - name: Start fail2ban on boot
+      ansible.builtin.service:
+        name: fail2ban
+        enabled: true
+        state: started
+
+    # --- app directory and backups ----------------------------------------
+
+    - name: Create the app directory
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        mode: "0750"
+      loop:
+        - "{{ app_dir }}"
+        - "{{ app_dir }}/backups"
+
+    - name: Install the database dump script
+      # Local-only: this survives a bad migration or a dropped table, NOT a
+      # lost server. Ship the dumps off-box if the data actually matters.
+      ansible.builtin.copy:
+        dest: /usr/local/bin/backup-db
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          set -euo pipefail
+          cd {{ app_dir }}
+          mkdir -p backups
+          stamp=$(date -u +%Y%m%dT%H%M%SZ)
+          docker compose exec -T postgres pg_dump -U connector connector \
+            | gzip > "backups/connector-$stamp.sql.gz"
+          find backups -name 'connector-*.sql.gz' -mtime +{{ backup_retention_days }} -delete
+
+    - name: Install the backup service unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/connector-backup.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Dump the connector database
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/backup-db
+      notify: Reload systemd
+
+    - name: Install the backup timer unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/connector-backup.timer
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Nightly connector database dump
+          [Timer]
+          OnCalendar=*-*-* 03:00:00 UTC
+          Persistent=true
+          [Install]
+          WantedBy=timers.target
+      notify: Reload systemd
+
+    - name: Enable the nightly backup timer
+      ansible.builtin.systemd_service:
+        name: connector-backup.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+
+  handlers:
+    - name: Restart sshd
+      ansible.builtin.service:
+        name: ssh
+        state: restarted
+
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true

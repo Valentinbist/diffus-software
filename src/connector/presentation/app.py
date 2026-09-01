@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -17,7 +16,6 @@ from connector.application.refresh_token import EnsureFreshToken
 from connector.application.resend_delivery import ResendDelivery
 from connector.application.sync_posts import SyncPosts
 from connector.config import get_settings
-from connector.domain.errors import NotConnectedError
 from connector.infrastructure.db.repositories import (
     SqlDeliveryRepository,
     SqlPostRepository,
@@ -27,7 +25,8 @@ from connector.infrastructure.db.session import make_engine, make_session_factor
 from connector.infrastructure.instagram.client import InstagramClient
 from connector.infrastructure.media.downloader import HttpMediaGateway
 from connector.infrastructure.telegram.sink import TelegramSink
-from connector.presentation.routes import router
+from connector.presentation.jobs import SyncJob
+from connector.presentation.routes import health_router, router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -65,34 +64,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     resend = ResendDelivery(posts=posts, deliveries=deliveries, media=media, sink=telegram)
     overview = GetOverview(tokens=tokens, posts=posts, deliveries=deliveries)
 
-    sync_lock = asyncio.Lock()
+    job = SyncJob(sync=sync, refresh=refresh)
 
-    app.state.sync = sync
+    app.state.sync_job = job
     app.state.connect = connect
-    app.state.refresh = refresh
     app.state.resend = resend
     app.state.overview = overview
-    app.state.sync_lock = sync_lock
-
-    async def run_sync_job() -> None:
-        async with sync_lock:
-            try:
-                report = await sync.run()
-                logger.info("sync complete: %s", report)
-            except NotConnectedError:
-                logger.info("Instagram not connected, skipping sync")
-            except Exception:  # noqa: BLE001 - scheduler job must never crash the loop
-                logger.exception("sync job failed")
-
-    async def run_refresh_job() -> None:
-        try:
-            await refresh.run()
-        except Exception:  # noqa: BLE001 - scheduler job must never crash the loop
-            logger.exception("token refresh FAILED - manual intervention required")
 
     scheduler = AsyncIOScheduler(timezone="utc")
-    scheduler.add_job(run_sync_job, "interval", minutes=settings.poll_interval_minutes)
-    scheduler.add_job(run_refresh_job, "interval", hours=24)
+    scheduler.add_job(job.run, "interval", minutes=settings.poll_interval_minutes)
     scheduler.start()
 
     try:
@@ -105,6 +85,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
+    app.include_router(health_router)
     app.include_router(router)
     return app
 

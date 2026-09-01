@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from connector.domain.entities import Delivery, DeliveryStatus, Post
+from connector.domain.entities import Delivery, DeliveryStatus, Post, Token
 
 MAX_ERROR_LENGTH = 2000
 
@@ -26,6 +26,16 @@ class StaticSource:
 
     async def fetch_recent(self, limit: int = 25) -> list[Post]:
         return list(self.posts)[:limit]
+
+
+class FailingSource:
+    """PostSource that raises, the way InstagramClient does on an API error."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    async def fetch_recent(self, limit: int = 25) -> list[Post]:
+        raise self.error
 
 
 class FakePosts:
@@ -103,3 +113,40 @@ class FakeMedia:
     @asynccontextmanager
     async def fetch(self, post: Post):
         yield []
+
+
+class FakeTokens:
+    def __init__(self, token: Token | None = None) -> None:
+        self.token = token
+
+    async def get(self) -> Token | None:
+        return self.token
+
+    async def save(self, token: Token) -> None:
+        self.token = token
+
+
+class FakeAuth:
+    """AuthGateway that stamps a fresh 60-day token on every refresh."""
+
+    def __init__(self, fail: bool = False) -> None:
+        self.fail = fail
+        self.refresh_calls = 0
+
+    def authorize_url(self) -> str:
+        return "https://example.com/authorize"
+
+    async def exchange_code(self, code: str) -> Token:
+        raise NotImplementedError
+
+    async def refresh(self, token: Token) -> Token:
+        self.refresh_calls += 1
+        if self.fail:
+            raise RuntimeError("simulated refresh failure")
+        now = datetime.now(UTC)
+        return Token(
+            access_token="refreshed",
+            ig_user_id=token.ig_user_id,
+            expires_at=now + timedelta(days=60),
+            refreshed_at=now,
+        )
