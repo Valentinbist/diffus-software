@@ -9,6 +9,7 @@ from connector.infrastructure.telegram.render import MAX_CAPTION_LENGTH, render_
 def make_post(caption: str | None) -> Post:
     return Post(
         id="1",
+        source="instagram",
         caption=caption,
         permalink="https://instagram.com/p/ABC123/",
         media=(MediaItem(url="https://cdn.example.com/1.jpg", type=MediaType.IMAGE),),

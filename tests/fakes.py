@@ -1,49 +1,70 @@
 """In-memory fakes implementing the domain ports, for use-case unit tests.
 
-No DB, no network. FakeDeliveries deliberately mirrors the claim/mark semantics
-of SqlDeliveryRepository (infrastructure/db/repositories.py) so the application
-tests exercise the same retry/exactly-once behaviour the SQL implementation
-provides.
+No DB, no network. FakeUnitOfWork wires the four fake repositories together
+the way SqlUnitOfWork wires the real ones. Every fake repository's write
+methods set `dirty = True`; FakeUnitOfWork.__aexit__ raises if it is exited
+cleanly while any repository is still dirty, so a use case that forgets to
+call commit() fails its test instead of silently passing.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import dataclasses
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from types import TracebackType
+from typing import Self
 
-from connector.domain.entities import Delivery, DeliveryStatus, Post, Preview, Token
-
-MAX_ERROR_LENGTH = 2000
+from connector.domain.entities import (
+    AccessToken,
+    Delivery,
+    Destination,
+    MediaFile,
+    Post,
+    Preview,
+    Token,
+)
+from connector.domain.ports import (
+    DeliveryRepository,
+    PostRepository,
+    PreviewRepository,
+    TokenRepository,
+)
 
 
 class StaticSource:
     """PostSource that returns a fixed, mutable list of posts."""
 
+    source = "instagram"
+
     def __init__(self, posts: list[Post]) -> None:
         self.posts = posts
 
-    async def fetch_recent(self, limit: int = 25) -> list[Post]:
+    async def fetch_recent(self, token: Token, limit: int = 25) -> list[Post]:
         return list(self.posts)[:limit]
 
 
 class FailingSource:
     """PostSource that raises, the way InstagramClient does on an API error."""
 
+    source = "instagram"
+
     def __init__(self, error: Exception) -> None:
         self.error = error
 
-    async def fetch_recent(self, limit: int = 25) -> list[Post]:
+    async def fetch_recent(self, token: Token, limit: int = 25) -> list[Post]:
         raise self.error
 
 
 class FakePosts:
     def __init__(self) -> None:
         self._posts: dict[str, Post] = {}
+        self.dirty = False
 
     async def upsert(self, post: Post) -> None:
         self._posts.setdefault(post.id, post)  # on_conflict_do_nothing
+        self.dirty = True
 
     async def get(self, post_id: str) -> Post | None:
         return self._posts.get(post_id)
@@ -57,44 +78,31 @@ class FakePosts:
 
 class FakeDeliveries:
     def __init__(self) -> None:
-        self._rows: dict[tuple[str, str], Delivery] = {}
+        self._rows: dict[tuple[str, Destination], Delivery] = {}
+        self.dirty = False
 
-    async def claim(self, post_id: str, chat_id: str, max_attempts: int = 5) -> bool:
-        key = (post_id, chat_id)
+    async def claim(self, post_id: str, destination: Destination) -> Delivery | None:
+        # Always a copy: mutating a delivery the caller got back must never
+        # silently update the stored row — only an explicit save() may do that,
+        # the way a detached ORM instance needs an explicit merge().
+        key = (post_id, destination)
         row = self._rows.get(key)
         if row is None:
-            self._rows[key] = Delivery(
-                post_id=post_id, chat_id=chat_id, status=DeliveryStatus.PENDING, attempts=0
-            )
-            return True
-        return row.status == DeliveryStatus.FAILED and row.attempts < max_attempts
-
-    async def mark(
-        self,
-        post_id: str,
-        chat_id: str,
-        status: DeliveryStatus,
-        error: str | None = None,
-    ) -> None:
-        key = (post_id, chat_id)
-        row = self._rows.get(key)
-        if row is None:
-            row = Delivery(post_id=post_id, chat_id=chat_id, status=status, attempts=0)
+            row = Delivery(post_id=post_id, destination=destination)
             self._rows[key] = row
+            self.dirty = True
+            return dataclasses.replace(row)
+        return dataclasses.replace(row) if row.can_retry() else None
 
-        row.status = status
-        if status == DeliveryStatus.SENT:
-            row.sent_at = datetime.now(UTC)
-            row.error = None
-        elif status == DeliveryStatus.FAILED:
-            row.attempts += 1
-            row.error = (error or "")[:MAX_ERROR_LENGTH]
+    async def save(self, delivery: Delivery) -> None:
+        self._rows[(delivery.post_id, delivery.destination)] = dataclasses.replace(delivery)
+        self.dirty = True
 
     async def for_posts(self, post_ids: Sequence[str]) -> dict[str, list[Delivery]]:
         grouped: dict[str, list[Delivery]] = {}
-        for (post_id, _chat_id), row in self._rows.items():
+        for (post_id, _destination), row in self._rows.items():
             if post_id in post_ids:
-                grouped.setdefault(post_id, []).append(row)
+                grouped.setdefault(post_id, []).append(dataclasses.replace(row))
         return grouped
 
 
@@ -103,8 +111,8 @@ class FakeSink:
         self.fail = fail
         self.calls: list[tuple[str, str]] = []
 
-    async def deliver(self, post: Post, chat_id: str, media_paths: Sequence[Path]) -> None:
-        self.calls.append((post.id, chat_id))
+    async def deliver(self, post: Post, address: str, media: Sequence[MediaFile]) -> None:
+        self.calls.append((post.id, address))
         if self.fail:
             raise RuntimeError("simulated delivery failure")
 
@@ -118,7 +126,7 @@ class FakeMedia:
         self.downloads: list[str] = []
 
     @asynccontextmanager
-    async def fetch(self, post: Post):
+    async def fetch(self, post: Post) -> AsyncIterator[list[MediaFile]]:
         yield []
 
     async def download_image(self, url: str) -> tuple[str, bytes] | None:
@@ -132,9 +140,11 @@ class FakeMedia:
 class FakePreviews:
     def __init__(self) -> None:
         self._rows: dict[tuple[str, int], Preview] = {}
+        self.dirty = False
 
     async def save(self, preview: Preview) -> None:
         self._rows[(preview.post_id, preview.index)] = preview
+        self.dirty = True
 
     async def get(self, post_id: str, index: int) -> Preview | None:
         return self._rows.get((post_id, index))
@@ -149,27 +159,45 @@ class FakePreviews:
 
 class FakeTokens:
     def __init__(self, token: Token | None = None) -> None:
-        self.token = token
+        self._tokens: dict[str, Token] = {token.source: token} if token is not None else {}
+        self.dirty = False
 
-    async def get(self) -> Token | None:
-        return self.token
+    @property
+    def token(self) -> Token | None:
+        """Convenience for tests with a single stored token: the one row, or None."""
+        return next(iter(self._tokens.values()), None)
+
+    async def get(self, source: str) -> Token | None:
+        return self._tokens.get(source)
 
     async def save(self, token: Token) -> None:
-        self.token = token
+        self._tokens[token.source] = token
+        self.dirty = True
 
 
 class FakeAuth:
     """AuthGateway that stamps a fresh 60-day token on every refresh."""
 
+    source = "instagram"
+
     def __init__(self, fail: bool = False) -> None:
         self.fail = fail
         self.refresh_calls = 0
+        self.exchanged_codes: list[str] = []
 
     def authorize_url(self) -> str:
         return "https://example.com/authorize"
 
     async def exchange_code(self, code: str) -> Token:
-        raise NotImplementedError
+        self.exchanged_codes.append(code)
+        now = datetime.now(UTC)
+        return Token(
+            source=self.source,
+            access_token=AccessToken(f"exchanged-{code}"),
+            external_user_id="1",
+            expires_at=now + timedelta(days=60),
+            refreshed_at=now,
+        )
 
     async def refresh(self, token: Token) -> Token:
         self.refresh_calls += 1
@@ -177,8 +205,75 @@ class FakeAuth:
             raise RuntimeError("simulated refresh failure")
         now = datetime.now(UTC)
         return Token(
-            access_token="refreshed",
-            ig_user_id=token.ig_user_id,
+            source=token.source,
+            access_token=AccessToken("refreshed"),
+            external_user_id=token.external_user_id,
             expires_at=now + timedelta(days=60),
             refreshed_at=now,
         )
+
+
+class FakeUnitOfWork:
+    """UnitOfWork over the fake repositories.
+
+    Re-enterable, and callable with no arguments returning itself, so the
+    same instance doubles as the `UnitOfWorkFactory` a use case is given
+    (`uow=uow`). `__aexit__` raises if a caller forgot to `commit()` a write.
+    """
+
+    def __init__(
+        self,
+        posts: FakePosts | None = None,
+        deliveries: FakeDeliveries | None = None,
+        previews: FakePreviews | None = None,
+        tokens: FakeTokens | None = None,
+    ) -> None:
+        # Kept as concrete types privately so __aexit__/commit/rollback can flip
+        # `dirty`; exposed publicly at the Protocol type, like SqlUnitOfWork's
+        # repositories, so ty checks use cases against the port, not the fake.
+        self._posts = posts if posts is not None else FakePosts()
+        self._deliveries = deliveries if deliveries is not None else FakeDeliveries()
+        self._previews = previews if previews is not None else FakePreviews()
+        self._tokens = tokens if tokens is not None else FakeTokens()
+        self.posts: PostRepository = self._posts
+        self.deliveries: DeliveryRepository = self._deliveries
+        self.previews: PreviewRepository = self._previews
+        self.tokens: TokenRepository = self._tokens
+        self.commits = 0
+
+    def __call__(self) -> Self:
+        return self
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        dirty = (
+            self._posts.dirty
+            or self._deliveries.dirty
+            or self._previews.dirty
+            or self._tokens.dirty
+        )
+        try:
+            if exc_type is None and dirty:
+                raise AssertionError("unit of work exited with uncommitted writes")
+        finally:
+            self._clear_dirty()
+
+    async def commit(self) -> None:
+        self.commits += 1
+        self._clear_dirty()
+
+    async def rollback(self) -> None:
+        self._clear_dirty()
+
+    def _clear_dirty(self) -> None:
+        self._posts.dirty = False
+        self._deliveries.dirty = False
+        self._previews.dirty = False
+        self._tokens.dirty = False

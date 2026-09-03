@@ -2,30 +2,36 @@
 
 Infrastructure adapters implement these protocols; the application layer
 depends only on these abstractions, never on concrete infrastructure.
+
+A UnitOfWork groups the repository writes of one use case into a single
+persistence boundary: it never spans a network call. Writes commit
+explicitly via `commit()`; reads never commit.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import AbstractAsyncContextManager
-from pathlib import Path
-from typing import Protocol
+from types import TracebackType
+from typing import Protocol, Self
 
-from connector.domain.entities import Delivery, DeliveryStatus, Post, Preview, Token
+from connector.domain.entities import Delivery, Destination, MediaFile, Post, Preview, Token
 
 
 class PostSource(Protocol):
-    async def fetch_recent(self, limit: int = 25) -> list[Post]: ...
+    source: str
+
+    async def fetch_recent(self, token: Token, limit: int = 25) -> list[Post]: ...
 
 
 class PostSink(Protocol):
     async def deliver(
-        self, post: Post, chat_id: str, media_paths: Sequence[Path]
+        self, post: Post, address: str, media: Sequence[MediaFile]
     ) -> None: ...
 
 
 class MediaGateway(Protocol):
-    def fetch(self, post: Post) -> AbstractAsyncContextManager[list[Path]]: ...
+    def fetch(self, post: Post) -> AbstractAsyncContextManager[list[MediaFile]]: ...
 
     async def download_image(self, url: str) -> tuple[str, bytes] | None:
         """(content type, bytes) of an image, or None if the URL isn't a reasonably sized image."""
@@ -33,6 +39,8 @@ class MediaGateway(Protocol):
 
 
 class AuthGateway(Protocol):
+    source: str
+
     def authorize_url(self) -> str: ...
 
     async def exchange_code(self, code: str) -> Token: ...
@@ -51,17 +59,16 @@ class PostRepository(Protocol):
 
 
 class DeliveryRepository(Protocol):
-    async def claim(
-        self, post_id: str, chat_id: str, max_attempts: int = 5
-    ) -> bool: ...
+    async def claim(self, post_id: str, destination: Destination) -> Delivery | None:
+        """Claim the right to (re)try this delivery, or None if it isn't claimable.
 
-    async def mark(
-        self,
-        post_id: str,
-        chat_id: str,
-        status: DeliveryStatus,
-        error: str | None = None,
-    ) -> None: ...
+        A fresh (post_id, destination) pair is always claimable. An existing
+        row is claimable again only while its own `Delivery.can_retry()` says
+        so — the retry policy lives on the entity, not here.
+        """
+        ...
+
+    async def save(self, delivery: Delivery) -> None: ...
 
     async def for_posts(self, post_ids: Sequence[str]) -> dict[str, list[Delivery]]: ...
 
@@ -77,6 +84,29 @@ class PreviewRepository(Protocol):
 
 
 class TokenRepository(Protocol):
-    async def get(self) -> Token | None: ...
+    async def get(self, source: str) -> Token | None: ...
 
     async def save(self, token: Token) -> None: ...
+
+
+class UnitOfWork(Protocol):
+    posts: PostRepository
+    deliveries: DeliveryRepository
+    previews: PreviewRepository
+    tokens: TokenRepository
+
+    async def __aenter__(self) -> Self: ...
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None: ...
+
+    async def commit(self) -> None: ...
+
+    async def rollback(self) -> None: ...
+
+
+UnitOfWorkFactory = Callable[[], UnitOfWork]

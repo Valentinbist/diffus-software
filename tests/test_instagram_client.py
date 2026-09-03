@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from connector.domain.entities import MediaType
+from datetime import UTC, datetime, timedelta
+
+import httpx
+
+from connector.domain.entities import AccessToken, MediaType, Token
 from connector.infrastructure.instagram.client import InstagramClient
 
 CAROUSEL_PAYLOAD = {
@@ -75,6 +79,7 @@ def test_parse_single_media_post():
     posts = InstagramClient._parse(CAROUSEL_PAYLOAD)
 
     single = next(p for p in posts if p.id == "456")
+    assert single.source == "instagram"
     assert len(single.media) == 1
     assert single.media[0].type == MediaType.IMAGE
     assert single.media[0].url == "https://cdn.example.com/single.jpg"
@@ -105,3 +110,61 @@ def test_parse_skips_posts_with_zero_usable_media():
     posts = InstagramClient._parse(payload)
 
     assert posts == []
+
+
+# -- AuthGateway: exchange_code / refresh, against a mocked transport ---------
+
+
+def make_client(handler) -> InstagramClient:
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return InstagramClient(
+        http, app_id="app-id", app_secret="app-secret", redirect_uri="https://example.com/cb"
+    )
+
+
+async def test_exchange_code_does_the_short_to_long_lived_two_hop():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "api.instagram.com":
+            assert request.url.path == "/oauth/access_token"
+            return httpx.Response(
+                200, json={"access_token": "short-lived-xyz", "user_id": 17841400000000000}
+            )
+        assert request.url.host == "graph.instagram.com"
+        assert request.url.path == "/access_token"
+        assert request.url.params["grant_type"] == "ig_exchange_token"
+        assert request.url.params["access_token"] == "short-lived-xyz"
+        return httpx.Response(200, json={"access_token": "long-lived-abc", "expires_in": 5_184_000})
+
+    client = make_client(handler)
+
+    token = await client.exchange_code("some-code")
+
+    assert token.source == "instagram"
+    assert token.external_user_id == "17841400000000000"
+    assert isinstance(token.access_token, AccessToken)
+    assert token.access_token.value == "long-lived-abc"
+
+
+async def test_refresh_keeps_source_and_user_id_and_sends_the_old_token():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "graph.instagram.com"
+        assert request.url.path == "/refresh_access_token"
+        assert request.url.params["grant_type"] == "ig_refresh_token"
+        assert request.url.params["access_token"] == "old-token"
+        return httpx.Response(200, json={"access_token": "new-token", "expires_in": 5_184_000})
+
+    client = make_client(handler)
+    now = datetime.now(UTC)
+    old_token = Token(
+        source="instagram",
+        access_token=AccessToken("old-token"),
+        external_user_id="17841400000000000",
+        expires_at=now + timedelta(days=10),
+        refreshed_at=now - timedelta(days=50),
+    )
+
+    refreshed = await client.refresh(old_token)
+
+    assert refreshed.source == "instagram"
+    assert refreshed.external_user_id == "17841400000000000"
+    assert refreshed.access_token.value == "new-token"

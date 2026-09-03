@@ -12,7 +12,7 @@ from typing import IO
 
 import httpx
 
-from connector.domain.entities import MediaType, Post
+from connector.domain.entities import MediaFile, MediaType, Post
 from connector.domain.errors import DeliveryError
 from connector.infrastructure.telegram.render import render_caption
 
@@ -32,31 +32,31 @@ class TelegramSink:
         self.http = http
         self.bot_token = bot_token
 
-    async def deliver(self, post: Post, chat_id: str, media_paths: Sequence[Path]) -> None:
-        if not media_paths:
+    async def deliver(self, post: Post, address: str, media: Sequence[MediaFile]) -> None:
+        items = list(media)
+        if not items:
             raise DeliveryError("no media to deliver")
 
         caption = render_caption(post)
-        items = list(zip(post.media, media_paths, strict=True))
 
         if len(items) == 1:
-            media_item, path = items[0]
-            is_video = media_item.type == MediaType.VIDEO
+            m = items[0]
+            is_video = m.item.type == MediaType.VIDEO
             method = "sendVideo" if is_video else "sendPhoto"
             field = "video" if is_video else "photo"
 
-            def make_files(path: Path = path, field: str = field) -> dict:
+            def make_files(path: Path = m.path, field: str = field) -> dict:
                 return {field: (path.name, path.open("rb"))}
 
-            data = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
+            data = {"chat_id": address, "caption": caption, "parse_mode": "HTML"}
             await self._call(method, data=data, make_files=make_files)
             return
 
         items = items[:MAX_MEDIA_GROUP_ITEMS]
         media_descriptor = []
-        for i, (media_item, _path) in enumerate(items):
+        for i, m in enumerate(items):
             entry: dict[str, str] = {
-                "type": "video" if media_item.type == MediaType.VIDEO else "photo",
+                "type": "video" if m.item.type == MediaType.VIDEO else "photo",
                 "media": f"attach://m{i}",
             }
             if i == 0:
@@ -65,12 +65,9 @@ class TelegramSink:
             media_descriptor.append(entry)
 
         def make_files(items: list = items) -> dict:
-            return {
-                f"m{i}": (path.name, path.open("rb"))
-                for i, (_media_item, path) in enumerate(items)
-            }
+            return {f"m{i}": (m.path.name, m.path.open("rb")) for i, m in enumerate(items)}
 
-        data = {"chat_id": chat_id, "media": json.dumps(media_descriptor)}
+        data = {"chat_id": address, "media": json.dumps(media_descriptor)}
         await self._call("sendMediaGroup", data=data, make_files=make_files)
 
     async def _call(self, method: str, data: dict, make_files: FilesFactory) -> None:

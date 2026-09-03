@@ -5,12 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from connector.domain.entities import Delivery, Post, Token
-from connector.domain.ports import (
-    DeliveryRepository,
-    PostRepository,
-    PreviewRepository,
-    TokenRepository,
-)
+from connector.domain.ports import UnitOfWorkFactory
 
 
 @dataclass
@@ -29,17 +24,16 @@ class Overview:
 
 @dataclass
 class GetOverview:
-    tokens: TokenRepository
-    posts: PostRepository
-    deliveries: DeliveryRepository
-    previews: PreviewRepository
+    uow: UnitOfWorkFactory
+    source: str
 
     async def run(self, limit: int = 20) -> Overview:
-        token = await self.tokens.get()
-        posts = await self.posts.list_recent(limit=limit)
-        ids = [p.id for p in posts]
-        deliveries_by_post = await self.deliveries.for_posts(ids)
-        previews_by_post = await self.previews.stored(ids)
+        async with self.uow() as uow:
+            token = await uow.tokens.get(self.source)
+            posts = await uow.posts.list_recent(limit=limit)
+            ids = [p.id for p in posts]
+            deliveries_by_post = await uow.deliveries.for_posts(ids)
+            previews_by_post = await uow.previews.stored(ids)
         views = [
             PostView(
                 post=post,

@@ -6,19 +6,29 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from connector.application.overview import Overview, PostView
-from connector.domain.entities import Delivery, DeliveryStatus, MediaItem, MediaType, Post, Token
-from connector.presentation.jobs import LastRun
-from connector.presentation.routes import configure_templates, templates
+from connector.application.sync_job import LastRun
+from connector.domain.entities import (
+    AccessToken,
+    Delivery,
+    DeliveryStatus,
+    Destination,
+    MediaItem,
+    MediaType,
+    Post,
+    Token,
+)
+from connector.presentation.routes import build_templates
 
-configure_templates(ZoneInfo("Europe/Berlin"))
+templates = build_templates(ZoneInfo("Europe/Berlin"))
 
 NOW = datetime(2026, 9, 3, 10, 0, tzinfo=UTC)  # 12:00 in Berlin
 
 
 def make_token(days_left: int = 40) -> Token:
     return Token(
-        access_token="t",
-        ig_user_id="1",
+        source="instagram",
+        access_token=AccessToken("t"),
+        external_user_id="1",
         expires_at=NOW + timedelta(days=days_left),
         refreshed_at=NOW,
     )
@@ -40,6 +50,7 @@ def make_post(
         media.append(MediaItem(url="https://cdn.example.com/p1-2.jpg", type=MediaType.IMAGE))
     return Post(
         id="p1",
+        source="instagram",
         caption=caption,
         permalink="https://instagram.com/p/p1/",
         media=tuple(media),
@@ -47,14 +58,18 @@ def make_post(
     )
 
 
-def render_index(ov: Overview, last_run: LastRun | None = None, multi_chat: bool = False) -> str:
+def render_index(
+    ov: Overview, last_run: LastRun | None = None, multi_target: bool = False
+) -> str:
     return templates.env.get_template("index.html").render(
-        ov=ov, now=NOW, last_run=last_run, multi_chat=multi_chat
+        ov=ov, now=NOW, last_run=last_run, multi_target=multi_target
     )
 
 
-def render_post(view: PostView, multi_chat: bool = False) -> str:
-    return templates.env.get_template("post.html").render(view=view, now=NOW, multi_chat=multi_chat)
+def render_post(view: PostView, multi_target: bool = False) -> str:
+    return templates.env.get_template("post.html").render(
+        view=view, now=NOW, multi_target=multi_target
+    )
 
 
 def connected(*views: PostView) -> Overview:
@@ -95,7 +110,9 @@ def test_failed_sync_and_expiring_token_are_called_out():
 
 
 def test_delivered_post_row_links_to_the_detail_page_with_the_stored_preview():
-    sent = Delivery(post_id="p1", chat_id="c1", status=DeliveryStatus.SENT)
+    sent = Delivery(
+        post_id="p1", destination=Destination("telegram", "c1"), status=DeliveryStatus.SENT
+    )
     view = PostView(post=make_post(), deliveries=[sent], stored_previews=frozenset({0}))
 
     html = render_index(connected(view))
@@ -119,7 +136,7 @@ def test_row_without_a_stored_preview_falls_back_to_the_cdn_then_to_a_placeholde
 def test_failed_delivery_offers_resend_and_hides_the_bot_token():
     failed = Delivery(
         post_id="p1",
-        chat_id="c1",
+        destination=Destination("telegram", "c1"),
         status=DeliveryStatus.FAILED,
         attempts=1,
         error="401 for url 'https://api.telegram.org/bot123:ABC/sendPhoto'",
@@ -129,24 +146,30 @@ def test_failed_delivery_offers_resend_and_hides_the_bot_token():
 
     assert "Telegram ✕ nicht durchgekommen" in html
     assert "Nochmal senden" in html
-    assert 'name="chat_id" value="c1"' in html
+    assert 'name="destination" value="telegram:c1"' in html
     assert "bot123:ABC" not in html
 
 
-def test_several_chats_get_one_label_each_in_chat_order():
+def test_several_destinations_get_one_label_each_in_destination_order():
     deliveries = [
-        Delivery(post_id="p1", chat_id="c2", status=DeliveryStatus.SENT),
-        Delivery(post_id="p1", chat_id="c1", status=DeliveryStatus.SKIPPED),
+        Delivery(
+            post_id="p1", destination=Destination("telegram", "c2"), status=DeliveryStatus.SENT
+        ),
+        Delivery(
+            post_id="p1",
+            destination=Destination("telegram", "c1"),
+            status=DeliveryStatus.SKIPPED,
+        ),
     ]
 
     html = render_index(
-        connected(PostView(post=make_post(), deliveries=deliveries)), multi_chat=True
+        connected(PostView(post=make_post(), deliveries=deliveries)), multi_target=True
     )
 
     assert "Telegram c1 – übersprungen" in html
     assert "Telegram c2 ✓" in html
     assert html.index("Telegram c1") < html.index("Telegram c2")
-    assert "Nochmal an c1 senden" in html
+    assert "Nochmal an Telegram c1 senden" in html
 
 
 def test_caption_is_escaped_and_missing_caption_is_labelled():
@@ -166,7 +189,7 @@ def test_caption_is_escaped_and_missing_caption_is_labelled():
 def test_detail_page_shows_all_media_the_full_caption_and_delivery_details():
     sent = Delivery(
         post_id="p1",
-        chat_id="c1",
+        destination=Destination("telegram", "c1"),
         status=DeliveryStatus.SENT,
         attempts=1,
         sent_at=NOW - timedelta(hours=1),
@@ -191,7 +214,11 @@ def test_detail_page_shows_all_media_the_full_caption_and_delivery_details():
 
 def test_detail_page_failed_delivery_shows_attempts_error_and_resends_back_here():
     failed = Delivery(
-        post_id="p1", chat_id="c1", status=DeliveryStatus.FAILED, attempts=2, error="chat not found"
+        post_id="p1",
+        destination=Destination("telegram", "c1"),
+        status=DeliveryStatus.FAILED,
+        attempts=2,
+        error="chat not found",
     )
 
     html = render_post(PostView(post=make_post(), deliveries=[failed]))

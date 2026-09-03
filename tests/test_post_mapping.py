@@ -14,6 +14,7 @@ POSTED_AT = datetime(2024, 1, 1, 12, tzinfo=UTC)
 def test_media_thumbnail_survives_row_round_trip():
     post = Post(
         id="1",
+        source="instagram",
         caption="c",
         permalink="https://instagram.com/p/1/",
         media=(
@@ -35,6 +36,7 @@ def test_media_thumbnail_survives_row_round_trip():
 def test_rows_written_before_thumbnails_were_stored_still_load():
     row = PostRow(
         id="legacy",
+        source="instagram",
         caption=None,
         permalink="https://instagram.com/p/legacy/",
         media=[{"url": "https://cdn.example.com/legacy.mp4", "type": "video"}],

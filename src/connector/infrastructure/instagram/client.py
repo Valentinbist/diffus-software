@@ -7,10 +7,7 @@ from urllib.parse import urlencode
 
 import httpx
 
-from connector.config import Settings
-from connector.domain.entities import MediaItem, MediaType, Post, Token
-from connector.domain.errors import NotConnectedError
-from connector.domain.ports import TokenRepository
+from connector.domain.entities import AccessToken, MediaItem, MediaType, Post, Token
 
 DEFAULT_EXPIRES_IN = 5_184_000  # 60 days, Instagram's documented default
 
@@ -21,19 +18,22 @@ MEDIA_FIELDS = (
 
 
 class InstagramClient:
+    source = "instagram"
+
     def __init__(
-        self, http: httpx.AsyncClient, settings: Settings, tokens: TokenRepository
+        self, http: httpx.AsyncClient, *, app_id: str, app_secret: str, redirect_uri: str
     ) -> None:
         self.http = http
-        self.settings = settings
-        self.tokens = tokens
+        self.app_id = app_id
+        self.app_secret = app_secret
+        self.redirect_uri = redirect_uri
 
     # -- AuthGateway ---------------------------------------------------
 
     def authorize_url(self) -> str:
         params = {
-            "client_id": self.settings.ig_app_id,
-            "redirect_uri": self.settings.ig_redirect_uri,
+            "client_id": self.app_id,
+            "redirect_uri": self.redirect_uri,
             "response_type": "code",
             "scope": "instagram_business_basic",
         }
@@ -43,10 +43,10 @@ class InstagramClient:
         resp = await self.http.post(
             "https://api.instagram.com/oauth/access_token",
             data={
-                "client_id": self.settings.ig_app_id,
-                "client_secret": self.settings.ig_app_secret,
+                "client_id": self.app_id,
+                "client_secret": self.app_secret,
                 "grant_type": "authorization_code",
-                "redirect_uri": self.settings.ig_redirect_uri,
+                "redirect_uri": self.redirect_uri,
                 "code": code,
             },
         )
@@ -56,13 +56,13 @@ class InstagramClient:
 
         short_lived_token = entry["access_token"]
         raw_user_id = entry.get("user_id")
-        ig_user_id = str(raw_user_id) if raw_user_id is not None else None
+        external_user_id = str(raw_user_id) if raw_user_id is not None else None
 
         exchange_resp = await self.http.get(
             "https://graph.instagram.com/access_token",
             params={
                 "grant_type": "ig_exchange_token",
-                "client_secret": self.settings.ig_app_secret,
+                "client_secret": self.app_secret,
                 "access_token": short_lived_token,
             },
         )
@@ -72,8 +72,9 @@ class InstagramClient:
         now = datetime.now(UTC)
         expires_in = exchange_payload.get("expires_in", DEFAULT_EXPIRES_IN)
         return Token(
-            access_token=exchange_payload["access_token"],
-            ig_user_id=ig_user_id,
+            source=self.source,
+            access_token=AccessToken(exchange_payload["access_token"]),
+            external_user_id=external_user_id,
             expires_at=now + timedelta(seconds=expires_in),
             refreshed_at=now,
         )
@@ -81,7 +82,10 @@ class InstagramClient:
     async def refresh(self, token: Token) -> Token:
         resp = await self.http.get(
             "https://graph.instagram.com/refresh_access_token",
-            params={"grant_type": "ig_refresh_token", "access_token": token.access_token},
+            params={
+                "grant_type": "ig_refresh_token",
+                "access_token": token.access_token.value,
+            },
         )
         resp.raise_for_status()
         payload = resp.json()
@@ -89,32 +93,29 @@ class InstagramClient:
         now = datetime.now(UTC)
         expires_in = payload.get("expires_in", DEFAULT_EXPIRES_IN)
         return Token(
-            access_token=payload["access_token"],
-            ig_user_id=token.ig_user_id,
+            source=self.source,
+            access_token=AccessToken(payload["access_token"]),
+            external_user_id=token.external_user_id,
             expires_at=now + timedelta(seconds=expires_in),
             refreshed_at=now,
         )
 
     # -- PostSource ------------------------------------------------------
 
-    async def fetch_recent(self, limit: int = 25) -> list[Post]:
-        token = await self.tokens.get()
-        if token is None:
-            raise NotConnectedError("Instagram is not connected")
-
+    async def fetch_recent(self, token: Token, limit: int = 25) -> list[Post]:
         resp = await self.http.get(
             "https://graph.instagram.com/me/media",
             params={
                 "fields": MEDIA_FIELDS,
                 "limit": limit,
-                "access_token": token.access_token,
+                "access_token": token.access_token.value,
             },
         )
         resp.raise_for_status()
         return self._parse(resp.json())
 
-    @staticmethod
-    def _parse(payload: dict) -> list[Post]:
+    @classmethod
+    def _parse(cls, payload: dict) -> list[Post]:
         posts: list[Post] = []
         for item in payload.get("data", []):
             if item.get("media_type") == "CAROUSEL_ALBUM":
@@ -143,6 +144,7 @@ class InstagramClient:
             posts.append(
                 Post(
                     id=item["id"],
+                    source=cls.source,
                     caption=item.get("caption"),
                     permalink=item.get("permalink", ""),
                     media=tuple(media_items),

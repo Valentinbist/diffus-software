@@ -8,20 +8,21 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
+from connector.application.deliver import DeliverPost
 from connector.application.refresh_token import EnsureFreshToken
+from connector.application.sync_job import SyncJob
 from connector.application.sync_posts import SyncPosts
-from connector.domain.entities import MediaItem, MediaType, Post, Token
+from connector.domain.entities import AccessToken, Destination, MediaItem, MediaType, Post, Token
 from connector.domain.errors import NotConnectedError
-from connector.presentation.jobs import SyncJob
 from tests.fakes import (
     FailingSource,
     FakeAuth,
-    FakeDeliveries,
     FakeMedia,
-    FakePosts,
-    FakePreviews,
     FakeSink,
     FakeTokens,
+    FakeUnitOfWork,
     StaticSource,
 )
 
@@ -29,6 +30,7 @@ from tests.fakes import (
 def make_post(post_id: str) -> Post:
     return Post(
         id=post_id,
+        source="instagram",
         caption="caption",
         permalink=f"https://instagram.com/p/{post_id}/",
         media=(MediaItem(url=f"https://cdn.example.com/{post_id}.jpg", type=MediaType.IMAGE),),
@@ -39,8 +41,9 @@ def make_post(post_id: str) -> Post:
 def make_token(age_days: int) -> Token:
     now = datetime.now(UTC)
     return Token(
-        access_token="original",
-        ig_user_id="17841400000000000",
+        source="instagram",
+        access_token=AccessToken("original"),
+        external_user_id="17841400000000000",
         expires_at=now + timedelta(days=60 - age_days),
         refreshed_at=now - timedelta(days=age_days),
     )
@@ -49,19 +52,22 @@ def make_token(age_days: int) -> Token:
 def make_job(source=None, sink=None, tokens=None, auth=None):
     source = source if source is not None else StaticSource([])
     sink = sink if sink is not None else FakeSink()
-    tokens = tokens if tokens is not None else FakeTokens()
+    # Default token is fresh (not None, not due for refresh) so the sync path
+    # in SyncPosts actually runs unless a test overrides it.
+    tokens = tokens if tokens is not None else FakeTokens(make_token(age_days=1))
     auth = auth if auth is not None else FakeAuth()
 
+    uow = FakeUnitOfWork(tokens=tokens)
+    media = FakeMedia()
+    deliver = DeliverPost(media=media, sinks={"telegram": sink}, uow=uow)
     sync = SyncPosts(
         source=source,
-        posts=FakePosts(),
-        deliveries=FakeDeliveries(),
-        media=FakeMedia(),
-        previews=FakePreviews(),
-        sink=sink,
-        chat_ids=["chat1"],
+        media=media,
+        deliver=deliver,
+        destinations=[Destination("telegram", "chat1")],
+        uow=uow,
     )
-    refresh = EnsureFreshToken(auth=auth, tokens=tokens)
+    refresh = EnsureFreshToken(auth=auth, uow=uow)
     return SyncJob(sync=sync, refresh=refresh), tokens, auth
 
 
@@ -73,7 +79,7 @@ async def test_run_refreshes_a_token_that_is_past_the_refresh_window():
 
     assert auth.refresh_calls == 1
     assert tokens.token is not None
-    assert tokens.token.access_token == "refreshed"
+    assert tokens.token.access_token.value == "refreshed"
 
 
 async def test_run_leaves_a_young_token_alone():
@@ -84,7 +90,7 @@ async def test_run_leaves_a_young_token_alone():
 
     assert auth.refresh_calls == 0
     assert tokens.token is not None
-    assert tokens.token.access_token == "original"
+    assert tokens.token.access_token.value == "original"
 
 
 async def test_repeated_runs_keep_refreshing_so_a_restart_never_strands_the_token():
@@ -120,10 +126,47 @@ async def test_run_swallows_sync_failures_so_the_scheduler_survives():
     await job.run()  # must not raise
 
 
-async def test_run_swallows_not_connected():
-    job, _tokens, _auth = make_job(source=FailingSource(NotConnectedError("no token")))
+# -- not connected: neither a source error nor a genuinely missing token may raise --
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        pytest.param(
+            lambda: make_job(source=FailingSource(NotConnectedError("no token"))),
+            id="source_raises",
+        ),
+        pytest.param(
+            lambda: make_job(source=StaticSource([]), tokens=FakeTokens()),
+            id="no_token_stored",
+        ),
+    ],
+)
+async def test_run_swallows_not_connected(build):
+    job, _tokens, _auth = build()
 
     await job.run()  # must not raise
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        pytest.param(
+            lambda: make_job(source=FailingSource(NotConnectedError("no token"))),
+            id="source_raises",
+        ),
+        pytest.param(
+            lambda: make_job(source=StaticSource([]), tokens=FakeTokens()),
+            id="no_token_stored",
+        ),
+    ],
+)
+async def test_not_connected_does_not_count_as_a_run(build):
+    job, _tokens, _auth = build()
+
+    await job.run()
+
+    assert job.last_run is None
 
 
 # -- last_run: what the UI's status line is built from ----------------------
@@ -162,11 +205,3 @@ async def test_failed_refresh_is_recorded_for_the_ui():
     assert job.last_run is not None
     assert job.last_run.refresh_error == "simulated refresh failure"
     assert job.last_run.sync_error is None
-
-
-async def test_not_connected_does_not_count_as_a_run():
-    job, _tokens, _auth = make_job(source=FailingSource(NotConnectedError("no token")))
-
-    await job.run()
-
-    assert job.last_run is None

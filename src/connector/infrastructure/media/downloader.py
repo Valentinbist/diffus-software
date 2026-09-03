@@ -9,7 +9,7 @@ from pathlib import Path
 
 import httpx
 
-from connector.domain.entities import MediaType, Post
+from connector.domain.entities import MediaFile, MediaType, Post
 
 # Instagram stills are a few hundred KB; anything past this isn't a preview.
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
@@ -20,10 +20,10 @@ class HttpMediaGateway:
         self.http = http
 
     @asynccontextmanager
-    async def fetch(self, post: Post) -> AsyncIterator[list[Path]]:
+    async def fetch(self, post: Post) -> AsyncIterator[list[MediaFile]]:
         """All media of a post as temp files, for handing to Telegram."""
         with tempfile.TemporaryDirectory(prefix="connector-media-") as tmpdir:
-            paths: list[Path] = []
+            files: list[MediaFile] = []
             for i, media_item in enumerate(post.media):
                 ext = "mp4" if media_item.type == MediaType.VIDEO else "jpg"
                 path = Path(tmpdir) / f"{post.id}-{i}.{ext}"
@@ -32,8 +32,8 @@ class HttpMediaGateway:
                     with path.open("wb") as f:
                         async for chunk in resp.aiter_bytes():
                             f.write(chunk)
-                paths.append(path)
-            yield paths
+                files.append(MediaFile(item=media_item, path=path))
+            yield files
 
     async def download_image(self, url: str) -> tuple[str, bytes] | None:
         """One still image into memory, or None if the URL doesn't serve a sane image."""

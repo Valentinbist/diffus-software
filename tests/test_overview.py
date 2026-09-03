@@ -6,13 +6,22 @@ from datetime import UTC, datetime
 
 from connector.application.overview import GetOverview
 from connector.application.post_detail import GetPostDetail
-from connector.domain.entities import DeliveryStatus, MediaItem, MediaType, Post, Preview
-from tests.fakes import FakeDeliveries, FakePosts, FakePreviews, FakeTokens
+from connector.domain.entities import (
+    Delivery,
+    DeliveryStatus,
+    Destination,
+    MediaItem,
+    MediaType,
+    Post,
+    Preview,
+)
+from tests.fakes import FakeUnitOfWork
 
 
 def make_post(post_id: str, minute: int = 0) -> Post:
     return Post(
         id=post_id,
+        source="instagram",
         caption="caption",
         permalink=f"https://instagram.com/p/{post_id}/",
         media=(MediaItem(url=f"https://cdn.example.com/{post_id}.jpg", type=MediaType.IMAGE),),
@@ -20,20 +29,21 @@ def make_post(post_id: str, minute: int = 0) -> Post:
     )
 
 
-async def make_repos():
-    posts, deliveries, previews = FakePosts(), FakeDeliveries(), FakePreviews()
-    await posts.upsert(make_post("old"))
-    await posts.upsert(make_post("new", minute=5))
-    await deliveries.mark("new", "chat1", DeliveryStatus.SENT)
-    await previews.save(Preview(post_id="new", index=0, content_type="image/jpeg", data=b"x"))
-    return posts, deliveries, previews
+async def make_uow() -> FakeUnitOfWork:
+    uow = FakeUnitOfWork()
+    await uow.posts.upsert(make_post("old"))
+    await uow.posts.upsert(make_post("new", minute=5))
+    d = Delivery(post_id="new", destination=Destination("telegram", "chat1"))
+    d.record_sent(datetime.now(UTC))
+    await uow.deliveries.save(d)
+    await uow.previews.save(Preview(post_id="new", index=0, content_type="image/jpeg", data=b"x"))
+    await uow.commit()
+    return uow
 
 
 async def test_overview_lists_newest_first_with_deliveries_and_stored_previews():
-    posts, deliveries, previews = await make_repos()
-    overview = GetOverview(
-        tokens=FakeTokens(), posts=posts, deliveries=deliveries, previews=previews
-    )
+    uow = await make_uow()
+    overview = GetOverview(uow=uow, source="instagram")
 
     result = await overview.run()
 
@@ -47,14 +57,14 @@ async def test_overview_lists_newest_first_with_deliveries_and_stored_previews()
 
 
 async def test_detail_returns_one_post_or_nothing():
-    posts, deliveries, previews = await make_repos()
-    detail = GetPostDetail(posts=posts, deliveries=deliveries, previews=previews)
+    uow = await make_uow()
+    detail = GetPostDetail(uow=uow)
 
     view = await detail.run("new")
     missing = await detail.run("nope")
 
     assert view is not None
     assert view.post.id == "new"
-    assert view.deliveries[0].chat_id == "chat1"
+    assert view.deliveries[0].destination == Destination("telegram", "chat1")
     assert view.stored_previews == frozenset({0})
     assert missing is None

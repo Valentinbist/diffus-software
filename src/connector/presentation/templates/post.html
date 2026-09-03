@@ -29,9 +29,9 @@
 
 <section class="details">
   <p class="eyebrow">Zustellung</p>
-  {% for d in view.deliveries|sort(attribute="chat_id") %}
+  {% for d in view.deliveries|sort(attribute="destination") %}
   <div class="delivery">
-    <p class="body">{{ d|delivery_label(multi_chat) }}</p>
+    <p class="body">{{ d|delivery_label(multi_target) }}</p>
     <p class="meta">
       {%- if d.status.value == "sent" -%}
         Zugestellt{% if d.sent_at %} {{ d.sent_at|when(now) }}{% endif %}
@@ -47,9 +47,9 @@
     {% if d.status.value != "sent" %}
     <form method="post" action="/resend">
       <input type="hidden" name="post_id" value="{{ post.id }}">
-      <input type="hidden" name="chat_id" value="{{ d.chat_id }}">
+      <input type="hidden" name="destination" value="{{ d.destination }}">
       <input type="hidden" name="next" value="/posts/{{ post.id }}">
-      <button type="submit" class="btn">{% if multi_chat %}Nochmal an {{ d.chat_id }} senden{% else %}Nochmal senden{% endif %}</button>
+      <button type="submit" class="btn">{% if multi_target %}Nochmal an {{ d|target_label }} senden{% else %}Nochmal senden{% endif %}</button>
     </form>
     {% endif %}
   </div>

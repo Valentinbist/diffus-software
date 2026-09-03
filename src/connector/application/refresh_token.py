@@ -3,33 +3,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from connector.domain.entities import Token
-from connector.domain.ports import AuthGateway, TokenRepository
-
-REFRESH_AFTER_DAYS = 50
-REFRESH_WITHIN_EXPIRY_DAYS = 7
+from connector.domain.ports import AuthGateway, UnitOfWorkFactory
 
 
 @dataclass
 class EnsureFreshToken:
     auth: AuthGateway
-    tokens: TokenRepository
+    uow: UnitOfWorkFactory
 
     async def run(self) -> Token | None:
-        token = await self.tokens.get()
+        async with self.uow() as uow:
+            token = await uow.tokens.get(self.auth.source)
         if token is None:
             return None
-
-        now = datetime.now(UTC)
-        needs_refresh = (
-            now - token.refreshed_at >= timedelta(days=REFRESH_AFTER_DAYS)
-            or token.expires_at - now <= timedelta(days=REFRESH_WITHIN_EXPIRY_DAYS)
-        )
-        if not needs_refresh:
+        if not token.needs_refresh(datetime.now(UTC)):
             return token
 
         refreshed = await self.auth.refresh(token)
-        await self.tokens.save(refreshed)
+
+        async with self.uow() as uow:
+            await uow.tokens.save(refreshed)
+            await uow.commit()
         return refreshed

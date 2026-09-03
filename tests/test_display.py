@@ -4,15 +4,24 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from connector.application.overview import PostView
-from connector.domain.entities import Delivery, DeliveryStatus, MediaItem, MediaType, Post
+from connector.domain.entities import (
+    Delivery,
+    DeliveryStatus,
+    Destination,
+    MediaItem,
+    MediaType,
+    Post,
+)
 from connector.presentation.display import (
     delivery_label,
     error_text,
     format_ago,
     format_day,
     format_when,
+    sink_label,
     stored_cover,
     summary,
+    target_label,
 )
 
 TZ = ZoneInfo("Europe/Berlin")
@@ -67,6 +76,7 @@ def test_error_text_strips_tokens_from_quoted_urls():
 def test_stored_cover_is_the_first_media_item_with_a_stored_still():
     post = Post(
         id="p",
+        source="instagram",
         caption=None,
         permalink="https://instagram.com/p/p/",
         media=(
@@ -80,10 +90,22 @@ def test_stored_cover_is_the_first_media_item_with_a_stored_still():
     assert stored_cover(PostView(post=post, deliveries=[], stored_previews=frozenset())) is None
 
 
-def test_delivery_label_names_the_chat_only_when_there_are_several():
-    sent = Delivery(post_id="p", chat_id="-100", status=DeliveryStatus.SENT)
-    failed = Delivery(post_id="p", chat_id="-100", status=DeliveryStatus.FAILED)
+def test_delivery_label_names_the_target_only_when_there_are_several():
+    dest = Destination("telegram", "-100")
+    sent = Delivery(post_id="p", destination=dest, status=DeliveryStatus.SENT)
+    failed = Delivery(post_id="p", destination=dest, status=DeliveryStatus.FAILED)
 
-    assert delivery_label(sent, multi_chat=False) == "Telegram ✓"
-    assert delivery_label(sent, multi_chat=True) == "Telegram -100 ✓"
-    assert delivery_label(failed, multi_chat=False) == "Telegram ✕ nicht durchgekommen"
+    assert delivery_label(sent, multi_target=False) == "Telegram ✓"
+    assert delivery_label(sent, multi_target=True) == "Telegram -100 ✓"
+    assert delivery_label(failed, multi_target=False) == "Telegram ✕ nicht durchgekommen"
+
+
+def test_sink_label_falls_back_to_capitalized_name_for_unknown_sinks():
+    assert sink_label("telegram") == "Telegram"
+    assert sink_label("signal") == "Signal"
+
+
+def test_target_label_combines_sink_label_and_address():
+    delivery = Delivery(post_id="p", destination=Destination("signal", "+49151"))
+
+    assert target_label(delivery) == "Signal +49151"
