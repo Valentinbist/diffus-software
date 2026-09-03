@@ -9,7 +9,10 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:ital,wght@0,400;0,500;1,400&family=Playfair+Display:ital,wght@0,400;0,700;1,400&display=swap">
   <style>
     /* Tokens lifted from the diffus.space design system (tokens/*.css).
-       Two colours, one grey, no cards, no shadows, pills are the only curve. */
+       Two colours, one grey, no cards, no shadows, pills are the only curve.
+       The nav's current-page link is the only other colour switch; the
+       calendar's .dot is the one place a colour comes from data (the
+       sub-calendar's own colour) rather than this token set. */
     :root {
       --diffus-black: #020202;
       --diffus-white: #ffffff;
@@ -106,6 +109,37 @@
     }
     .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
 
+    /* Cross-context nav: Posts / Kalender, current page in body colour */
+    .nav { display: flex; gap: 18px; margin-bottom: 28px; font-size: var(--font-size-xs); color: var(--text-muted); }
+    .nav .current { color: var(--text-body); }
+
+    /* Coloured dot: the sub-calendar's own colour, the one data-driven colour in the system */
+    .dot { display: inline-block; width: 10px; height: 10px; border-radius: var(--radius-button); vertical-align: middle; margin-right: 6px; }
+    .tags { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+
+    /* Calendar list/month toggle + sub-calendar filter form */
+    .toggle { margin-top: 14px; }
+    .filter { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; margin-top: 14px; }
+    .filter label { font-size: var(--font-size-xs); }
+
+    /* Agenda day heading + event row time column */
+    .day-head { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border-subtle); }
+    .row .time { flex: none; width: 96px; }
+    .pager { display: flex; gap: 18px; margin-top: 22px; }
+
+    /* Month grid: fixed seven-column table, no cards, hairline rows */
+    .grid { width: 100%; table-layout: fixed; border-collapse: collapse; margin-top: 22px; font-size: var(--font-size-xs); }
+    .grid th { font-weight: 500; text-align: left; padding: 6px 4px; color: var(--text-muted); }
+    .grid td { vertical-align: top; height: 64px; padding: 4px; border-top: 1px solid var(--border-subtle); }
+    .grid td.out { color: var(--text-muted); }
+    .grid td.today .num { color: var(--text-body); text-decoration: underline; }
+    .grid .ev { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-decoration: none; font-size: 12px; }
+    @media (max-width: 480px) {
+      .grid .ev .t { display: none; }
+      .grid td { height: 48px; }
+      .row .time { width: 64px; }
+    }
+
     /* Notice: a 28% hairline box, the only "container" in the system */
     .notice { margin-top: 22px; padding: 18px; border: 1px solid var(--border-default); }
     .notice .actions { margin-top: 16px; }
@@ -165,6 +199,10 @@
 </head>
 <body>
   <main>
+    <nav class="nav">
+      <a class="plain{% if active_page == "posts" %} current{% endif %}" href="/">Posts</a>
+      {% if calendar_enabled %}<a class="plain{% if active_page == "calendar" %} current{% endif %}" href="/calendar">Kalender</a>{% endif %}
+    </nav>
     {% block content %}{% endblock %}
   </main>
 </body>

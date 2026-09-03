@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from diffus.shared.db.base import Base
@@ -21,7 +21,7 @@ class SubCalendarRow(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     color: Mapped[str] = mapped_column(String(16), nullable=False)
-    position: Mapped[int] = mapped_column(nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class EventRow(Base):

@@ -11,5 +11,3 @@ class NotConnectedError(ConnectorError):
 
 class DeliveryError(ConnectorError):
     """Raised when delivering a post to a sink (e.g. Telegram) fails."""
-
-# reload-probe

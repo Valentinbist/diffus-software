@@ -22,12 +22,10 @@ from diffus.crossposting.domain.entities import DeliveryStatus
 
 
 def _to_linkable(view: PostView) -> LinkablePost:
-    thumbnail_url = None
-    for index in sorted(view.stored_previews):
-        thumbnail_url = f"/posts/{view.post.id}/media/{index}"
-        break
-    if thumbnail_url is None:
-        thumbnail_url = view.post.cover_url
+    first = min(view.stored_previews, default=None)
+    thumbnail_url = (
+        f"/posts/{view.post.id}/media/{first}" if first is not None else view.post.cover_url
+    )
 
     return LinkablePost(
         id=view.post.id,

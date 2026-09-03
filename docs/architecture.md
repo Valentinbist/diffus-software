@@ -45,6 +45,26 @@ four repositories, and `UnitOfWork` / `UnitOfWorkFactory`.
 sources. Instagram ids stay bare (existing data). Every *new* source adapter
 emits `"<source>:<external id>"` as `Post.id`.
 
+### Calendar context
+
+```text
+SubCalendar    id, name, color, position                        # one room/category in the shared calendar
+CalendarEvent  id, title, description, who, location, starts_at, ends_at, whole_day,
+               sub_calendar_ids, series_id, removed_at
+               local_days(tz) -> every local calendar day the [starts_at, ends_at) interval touches
+               removed
+EventLink      event_id, post_id, linked_at                      # many-to-many, event <-> post
+LinkablePost   id, caption, permalink, posted_at, thumbnail_url, detail_url, delivered
+               # the calendar's own view of a post, via PostCatalog — not crossposting's PostView
+```
+
+Ports (`calendar/domain/ports.py`): `CalendarGateway` (fetches a
+`CalendarSnapshot` for a date range), `PostCatalog` (`recent`/`by_ids`, the
+calendar's read-only window onto crossposting's posts), the three
+repositories (`SubCalendarRepository`, `EventRepository`,
+`EventLinkRepository`), and `CalendarUnitOfWork` / `CalendarUnitOfWorkFactory`
+— its own unit of work, separate from crossposting's.
+
 ## Schema (4 tables)
 
 ```sql
@@ -58,6 +78,23 @@ deliveries  (post_id, sink, address, status, attempts, sent_at, error)
 No `accounts` table: one connection per source. Multi-account would key
 `tokens` (and routing) by an account id; that is a schema change, deliberately
 not made yet.
+
+### Calendar schema (4 more tables, migration `0004`)
+
+```sql
+calendar_sub_calendars       id PK, name, color, position
+calendar_events              id PK, title, description, who, location, starts_at, ends_at,
+                              whole_day, series_id, fetched_at, removed_at
+calendar_event_sub_calendars event_id FK calendar_events.id, sub_calendar_id FK calendar_sub_calendars.id
+                              PRIMARY KEY (event_id, sub_calendar_id)
+calendar_event_posts         event_id FK calendar_events.id, post_id, linked_at
+                              PRIMARY KEY (event_id, post_id)
+```
+
+`calendar_event_posts.post_id` has **no foreign key**: `posts` lives in the
+crossposting context's schema, and a context's tables never reference another
+context's tables directly — the calendar only ever reaches a post through
+`PostCatalog`, never a join.
 
 ## Layout
 
@@ -91,8 +128,22 @@ src/diffus/
     presentation/
       services.py                 # typed Services dataclass handed to routes via Depends
       routes.py, display.py, templates/            # context-specific filters + templates
-  calendar/                       # second context, in progress
-alembic/                          # 0001 initial, 0002 previews, 0003 destinations and sources
+  calendar/                       # second bounded context — sync a shared external calendar,
+                                  #   link events to posts, show what's covered and what isn't
+    domain/                      # entities (SubCalendar, CalendarEvent, EventLink, LinkablePost),
+                                  #   ports (CalendarGateway, PostCatalog, repositories, UnitOfWork), errors
+    application/
+      sync_calendar.py, sync_job.py                # SyncCalendar + CalendarSyncJob, mirrors crossposting's
+      calendar_events.py, event_detail.py           # read side: agenda/month query, one event's detail
+      link_event_post.py                            # link/unlink a post to an event
+      suggest_posts.py, caption_dates.py             # the link-picker's scoring heuristic; pure, stdlib only
+    infrastructure/
+      db/                          # models (Base from shared), repositories, uow.py — mirrors crossposting's
+      kalender_digital.py          # KalenderDigitalClient: CalendarGateway over kalender.digital's JSON API
+      crossposting.py              # CrosspostingPostCatalog: PostCatalog over crossposting's read use cases
+    presentation/
+      services.py, routes.py, display.py, templates/
+alembic/                          # 0001 initial, 0002 previews, 0003 destinations and sources, 0004 calendar
 ```
 
 ## Conventions
@@ -136,7 +187,10 @@ rules that govern every context from here on:
    `infrastructure/`. A context that needs another's data gets a port in its
    own domain and an adapter in its own infrastructure; domain events through
    the unit of work's `commit()` come when two contexts need to react to each
-   other.
+   other. Exception, decided 2026-09-03: an adapter in a context's
+   `infrastructure/` may call another context's `application/` read use
+   cases — the application read side is a context's public API.
+   `calendar/infrastructure/crossposting.py` is the first such adapter.
 4. One FastAPI app, one Alembic history, one `Services` per context mounted
    under its own router prefix.
 
@@ -163,3 +217,16 @@ they were untouched.
 - `--workers 1` is load-bearing: the poller runs in the app process.
 - Signal (later): dedicated phone number + `signal-cli`; attachments come from
   `MediaFile.path`.
+- Calendar: `KalenderDigitalClient` talks to an **undocumented JSON API**
+  (kalender.digital's own Angular frontend uses it); it's pinned by recorded
+  payloads in tests, and the documented ICS export shares the same event ids
+  so a fallback adapter is a drop-in behind `CalendarGateway` if it ever
+  breaks. The share-link token is an **editor-level capability** — anyone
+  holding it can edit or delete the whole calendar — passed as a query
+  param, so it appears in httpx error strings; `redact()` strips it before
+  any error reaches the UI, and the adapter never logs request URLs.
+  **Recurring occurrences carry their own stable id**; editing a series
+  upstream can re-id its occurrences, so the old ids get `removed_at` (and
+  keep their post links, visible via the "gelöscht" notice) while the new
+  ids come back unlinked. `series_id` is stored for a later fix that carries
+  links across a re-id.

@@ -234,3 +234,19 @@ def test_detail_page_without_deliveries_says_so():
 
     assert "Ohne Text" in html
     assert "Noch an keinen Kanal zugestellt." in html
+
+
+# -- nav ------------------------------------------------------------------------
+
+
+def test_nav_shows_the_calendar_link_only_when_the_calendar_context_is_enabled():
+    ov = Overview(token=None, posts=[])
+    enabled = build_templates(ZoneInfo("Europe/Berlin"), calendar_enabled=True)
+
+    with_calendar = enabled.env.get_template("index.html").render(
+        ov=ov, now=NOW, last_run=None, multi_target=False
+    )
+    without_calendar = render_index(ov)
+
+    assert 'href="/calendar"' in with_calendar
+    assert 'href="/calendar"' not in without_calendar

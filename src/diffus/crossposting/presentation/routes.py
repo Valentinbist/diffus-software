@@ -24,10 +24,14 @@ router = APIRouter(dependencies=[Depends(require_auth)])
 ServicesDep = Annotated[Services, Depends(get_services)]
 
 
-def build_templates(tz: ZoneInfo) -> Jinja2Templates:
+def build_templates(tz: ZoneInfo, calendar_enabled: bool = False) -> Jinja2Templates:
     """A Jinja2Templates instance with the display filters installed for `tz`."""
     shared_dir = Path(__file__).parent.parent.parent / "shared" / "presentation" / "templates"
-    templates = _build_shared_templates(tz, [Path(__file__).parent / "templates", shared_dir])
+    templates = _build_shared_templates(
+        tz,
+        [Path(__file__).parent / "templates", shared_dir],
+        {"calendar_enabled": calendar_enabled},
+    )
     templates.env.filters["delivery_label"] = display.delivery_label
     templates.env.filters["target_label"] = display.target_label
     templates.env.filters["stored_cover"] = display.stored_cover

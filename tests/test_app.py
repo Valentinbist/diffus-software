@@ -12,7 +12,14 @@ import httpx
 import pytest
 
 from diffus.app import create_app, lifespan
+from diffus.calendar.application.calendar_events import GetCalendarEvents
+from diffus.calendar.application.event_detail import GetEventDetail
+from diffus.calendar.application.link_event_post import LinkEventPost
+from diffus.calendar.application.sync_calendar import SyncCalendar
 from diffus.calendar.application.sync_job import CalendarSyncJob
+from diffus.calendar.domain.entities import CalendarEvent, CalendarSnapshot, LinkablePost
+from diffus.calendar.presentation.routes import build_templates as build_calendar_templates
+from diffus.calendar.presentation.services import CalendarServices
 from diffus.crossposting.application.connect_instagram import ConnectInstagram
 from diffus.crossposting.application.deliver import DeliverPost
 from diffus.crossposting.application.overview import GetOverview
@@ -26,6 +33,7 @@ from diffus.crossposting.domain.entities import Destination, MediaItem, MediaTyp
 from diffus.crossposting.presentation.routes import build_templates
 from diffus.crossposting.presentation.services import Services
 from diffus.shared.config import get_settings
+from tests.calendar.fakes import FakeCalendar, FakeCalendarUnitOfWork, FakeEvents, FakePostCatalog
 from tests.crossposting.fakes import FakeAuth, FakeMedia, FakeSink, FakeUnitOfWork, StaticSource
 
 
@@ -56,7 +64,7 @@ async def test_lifespan_builds_the_whole_graph_without_a_database(settings_env):
         ]
         # No KALENDER_DIGITAL_TOKEN in settings_env: the calendar graph is
         # not built at all, not built-but-idle.
-        assert app.state.calendar_sync_job is None
+        assert app.state.calendar is None
 
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -72,7 +80,7 @@ async def test_lifespan_builds_the_calendar_graph_when_a_token_is_set(settings_e
     app = create_app()
 
     async with lifespan(app):
-        assert isinstance(app.state.calendar_sync_job, CalendarSyncJob)
+        assert isinstance(app.state.calendar, CalendarServices)
 
 
 async def make_uow() -> FakeUnitOfWork:
@@ -111,6 +119,106 @@ def make_services(uow: FakeUnitOfWork, sink: FakeSink, media: FakeMedia) -> Serv
         destinations=destinations,
         templates=build_templates(ZoneInfo("Europe/Berlin")),
     )
+
+
+def make_calendar_uow() -> tuple[FakeCalendarUnitOfWork, FakePostCatalog]:
+    event = CalendarEvent(
+        id="e1",
+        title="Widersetzen Plenum",
+        description=None,
+        who=None,
+        location=None,
+        starts_at=datetime(2026, 9, 3, 16, 0, tzinfo=UTC),
+        ends_at=datetime(2026, 9, 3, 18, 0, tzinfo=UTC),
+        whole_day=False,
+        sub_calendar_ids=frozenset(),
+        series_id=None,
+    )
+    uow = FakeCalendarUnitOfWork(events=FakeEvents([event]))
+    post = LinkablePost(
+        id="p1",
+        caption="Text",
+        permalink="https://instagram.com/p/p1/",
+        posted_at=datetime(2026, 9, 1, tzinfo=UTC),
+        thumbnail_url=None,
+        detail_url="/posts/p1",
+        delivered=False,
+    )
+    return uow, FakePostCatalog([post])
+
+
+def make_calendar_services(
+    uow: FakeCalendarUnitOfWork, catalog: FakePostCatalog
+) -> CalendarServices:
+    tz = ZoneInfo("Europe/Berlin")
+    snapshot = CalendarSnapshot(sub_calendars=(), events=())
+    sync = SyncCalendar(calendar=FakeCalendar(snapshot), uow=uow)
+    return CalendarServices(
+        sync_job=CalendarSyncJob(sync),
+        calendar=GetCalendarEvents(uow=uow, posts=catalog, tz=tz),
+        event_detail=GetEventDetail(uow=uow, posts=catalog, tz=tz),
+        link_post=LinkEventPost(uow=uow, posts=catalog),
+        tz=tz,
+        templates=build_calendar_templates(tz, calendar_enabled=True),
+    )
+
+
+async def test_calendar_pages_and_linking_work_on_fakes(settings_env):
+    uow, catalog = make_calendar_uow()
+    calendar_services = make_calendar_services(uow, catalog)
+    services = make_services(await make_uow(), FakeSink(), FakeMedia())
+    app = create_app(services=services, calendar=calendar_services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.get("/calendar")
+        assert resp.status_code == 200
+        assert "Widersetzen Plenum" in resp.text
+
+        resp = await client.get("/calendar?view=month&month=2026-09")
+        assert resp.status_code == 200
+
+        resp = await client.get("/calendar/events/e1")
+        assert resp.status_code == 200
+
+        resp = await client.post("/calendar/events/e1/link", data={"post_id": "p1"})
+        assert resp.status_code == 303
+
+        resp = await client.get("/calendar/events/e1")
+        assert "Verknüpfte Posts" in resp.text
+        assert "/posts/p1" in resp.text
+
+        resp = await client.post("/calendar/events/e1/unlink", data={"post_id": "p1"})
+        assert resp.status_code == 303
+
+        resp = await client.get("/calendar/events/nope")
+        assert resp.status_code == 404
+
+        resp = await client.post("/calendar/sync")
+        assert resp.status_code == 303
+
+
+async def test_calendar_routes_404_and_the_nav_hides_the_link_when_the_calendar_is_disabled(
+    settings_env,
+):
+    services = make_services(await make_uow(), FakeSink(), FakeMedia())
+    app = create_app(services=services, calendar=None)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.get("/calendar")
+        assert resp.status_code == 404
+
+        resp = await client.get("/")
+        assert 'href="/calendar"' not in resp.text
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/healthz")
+        assert resp.status_code == 200
 
 
 async def test_pages_and_resend_work_on_fakes(settings_env):

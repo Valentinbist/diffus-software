@@ -19,11 +19,19 @@ context.
    - Set `BASIC_AUTH_USERNAME` / `BASIC_AUTH_PASSWORD` for the UI.
    - Optionally set `DISPLAY_TIMEZONE` (default `Europe/Berlin`) for the times
      the UI shows. Storage stays UTC.
+   - Optionally set `KALENDER_DIGITAL_TOKEN` to also sync the shared room
+     calendar from [kalender.digital](https://kalender.digital) and show it
+     under **Kalender**: it's the 20 hex characters at the end of that
+     calendar's share link (`https://kalender.digital/<token>`). That link is
+     editor-level — anyone holding it can edit or delete the whole calendar —
+     so treat it like a password. Leave it empty to run without the calendar
+     feature; nothing calendar-related is synced, shown, or routable.
 2. `docker compose up --build` (the dev stack: hot-reloading app + Postgres;
    the image that ships is the `runtime` stage of the same Dockerfile)
 3. Open `http://localhost:8000` (behind Basic auth) and click **Instagram
    verbinden** to complete the OAuth flow. The UI is in German, like the
-   diffus.space site it belongs to.
+   diffus.space site it belongs to, and has a **Kalender** page alongside
+   the post feed when `KALENDER_DIGITAL_TOKEN` is set.
 
 The first sync after connecting only marks existing posts as seen — it never
 blasts your entire history into Telegram. New posts found on later polls are
@@ -112,6 +120,7 @@ once by hand in their panel. Everything after that is declarative.
 | `POSTGRES_PASSWORD` | Database password |
 | `IG_APP_ID`, `IG_APP_SECRET`, `IG_REDIRECT_URI` | Instagram app credentials |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_IDS` | Telegram bot and target chats |
+| `KALENDER_DIGITAL_TOKEN` | kalender.digital share-link token; leave the secret empty (or unset) to deploy without the calendar feature |
 | `BASIC_AUTH_USERNAME`, `BASIC_AUTH_PASSWORD` | UI credentials |
 
 ### Deploying

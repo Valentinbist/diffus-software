@@ -11,10 +11,17 @@ from zoneinfo import ZoneInfo
 import httpx
 from fastapi import APIRouter, FastAPI
 
+from diffus.calendar.application.calendar_events import GetCalendarEvents
+from diffus.calendar.application.event_detail import GetEventDetail
+from diffus.calendar.application.link_event_post import LinkEventPost
 from diffus.calendar.application.sync_calendar import SyncCalendar
 from diffus.calendar.application.sync_job import CalendarSyncJob
+from diffus.calendar.infrastructure.crossposting import CrosspostingPostCatalog
 from diffus.calendar.infrastructure.db.uow import SqlCalendarUnitOfWork
 from diffus.calendar.infrastructure.kalender_digital import KalenderDigitalClient
+from diffus.calendar.presentation.routes import build_templates as build_calendar_templates
+from diffus.calendar.presentation.routes import router as calendar_router
+from diffus.calendar.presentation.services import CalendarServices
 from diffus.crossposting.application.connect_instagram import ConnectInstagram
 from diffus.crossposting.application.deliver import DeliverPost
 from diffus.crossposting.application.overview import GetOverview
@@ -82,20 +89,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     job = SyncJob(sync=sync, refresh=EnsureFreshToken(auth=instagram, uow=uow))
 
+    tz = ZoneInfo(settings.display_timezone)
+    overview = GetOverview(uow=uow, source=instagram.source)
+    detail = GetPostDetail(uow=uow)
+
     app.state.services = Services(
         sync_job=job,
         connect=ConnectInstagram(auth=instagram, uow=uow),
         resend=ResendDelivery(uow=uow, deliver=deliver),
-        overview=GetOverview(uow=uow, source=instagram.source),
-        detail=GetPostDetail(uow=uow),
+        overview=overview,
+        detail=detail,
         preview=GetPreview(uow=uow),
         destinations=destinations,
-        templates=build_templates(ZoneInfo(settings.display_timezone)),
+        templates=build_templates(tz, calendar_enabled=settings.calendar_enabled),
     )
 
     # The calendar is an optional second context: an empty token means no
     # calendar graph is built at all, not a graph that quietly does nothing.
-    calendar_job: CalendarSyncJob | None = None
+    calendar_services: CalendarServices | None = None
     if settings.calendar_enabled:
         calendar_uow = functools.partial(SqlCalendarUnitOfWork, session_factory)
         calendar_gateway = KalenderDigitalClient(
@@ -109,16 +120,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             past_months=settings.calendar_past_months,
             future_months=settings.calendar_future_months,
         )
-        calendar_job = CalendarSyncJob(sync_calendar)
-    app.state.calendar_sync_job = calendar_job
+        # The one exception to "contexts never import each other's
+        # application layer": a context's application read side is its
+        # public API (see docs/architecture.md, Bounded contexts).
+        catalog = CrosspostingPostCatalog(overview=overview, detail=detail)
+        calendar_services = CalendarServices(
+            sync_job=CalendarSyncJob(sync_calendar),
+            calendar=GetCalendarEvents(uow=calendar_uow, posts=catalog, tz=tz),
+            event_detail=GetEventDetail(uow=calendar_uow, posts=catalog, tz=tz),
+            link_post=LinkEventPost(uow=calendar_uow, posts=catalog),
+            tz=tz,
+            templates=build_calendar_templates(tz, calendar_enabled=True),
+        )
+    app.state.calendar = calendar_services
 
     async def tick() -> None:
         # One interval job on purpose, running both contexts' syncs in
         # sequence, so "an interval trigger first fires one interval after
         # start" (docs/architecture.md, Sharp edges) only has to be true once.
         await job.run()
-        if calendar_job is not None:
-            await calendar_job.run()
+        if calendar_services is not None:
+            await calendar_services.sync_job.run()
 
     scheduler = start_scheduler(tick, settings.poll_interval_minutes)
 
@@ -130,17 +152,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await engine.dispose()
 
 
-def create_app(services: Services | None = None) -> FastAPI:
+def create_app(
+    services: Services | None = None, calendar: CalendarServices | None = None
+) -> FastAPI:
     if services is not None:
         # Pre-built services (tests): skip the lifespan, so no real DB engine
         # or scheduler is started, and install the given object graph directly.
         app = FastAPI(docs_url=None, redoc_url=None)
         app.state.services = services
-        app.state.calendar_sync_job = None
+        app.state.calendar = calendar
     else:
         app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
     app.include_router(health_router)
     app.include_router(router)
+    # Always mounted: get_calendar_services (its Depends) 404s when the
+    # context is off, so the route table doesn't change with the feature flag.
+    app.include_router(calendar_router)
     return app
 
 
