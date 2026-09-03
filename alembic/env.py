@@ -13,7 +13,9 @@ from alembic import context
 # Make `src/` importable when alembic is invoked from the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from connector.infrastructure.db.models import Base  # noqa: E402
+import diffus.calendar.infrastructure.db.models  # noqa: E402, F401
+import diffus.crossposting.infrastructure.db.models  # noqa: E402, F401
+from diffus.shared.db.base import Base  # noqa: E402
 
 config = context.config
 
@@ -27,7 +29,7 @@ def get_url() -> str:
     url = os.environ.get("DATABASE_URL")
     if url:
         return url
-    from connector.config import get_settings
+    from diffus.shared.config import get_settings
 
     return get_settings().database_url
 

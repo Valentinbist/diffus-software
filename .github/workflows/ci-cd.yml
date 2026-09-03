@@ -69,6 +69,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
+          target: runtime
           push: true
           tags: |
             ${{ steps.meta.outputs.image }}
@@ -125,6 +126,7 @@ jobs:
             IG_REDIRECT_URI=${{ secrets.IG_REDIRECT_URI }}
             TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
             TELEGRAM_CHAT_IDS=${{ secrets.TELEGRAM_CHAT_IDS }}
+            KALENDER_DIGITAL_TOKEN=${{ secrets.KALENDER_DIGITAL_TOKEN }}
             BASIC_AUTH_USERNAME=${{ secrets.BASIC_AUTH_USERNAME }}
             BASIC_AUTH_PASSWORD=${{ secrets.BASIC_AUTH_PASSWORD }}
         run: |

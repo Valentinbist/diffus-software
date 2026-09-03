@@ -19,7 +19,8 @@ context.
    - Set `BASIC_AUTH_USERNAME` / `BASIC_AUTH_PASSWORD` for the UI.
    - Optionally set `DISPLAY_TIMEZONE` (default `Europe/Berlin`) for the times
      the UI shows. Storage stays UTC.
-2. `docker compose up --build`
+2. `docker compose up --build` (the dev stack: hot-reloading app + Postgres;
+   the image that ships is the `runtime` stage of the same Dockerfile)
 3. Open `http://localhost:8000` (behind Basic auth) and click **Instagram
    verbinden** to complete the OAuth flow. The UI is in German, like the
    diffus.space site it belongs to.
@@ -39,14 +40,34 @@ uv run ruff check .
 uv run ty check
 ```
 
+Or entirely in Docker. `docker-compose.yml` builds the `dev` stage and
+bind-mounts `src/`, so edits reload without a rebuild:
+
+```sh
+docker compose up --watch          # also rebuilds on pyproject.toml/uv.lock, restarts on new migrations
+docker compose exec app pytest -q  # tests inside the container
+```
+
+The `Dockerfile` is staged: `deps` → `builder` → `runtime` (what CI pushes to
+GHCR: no uv, no sources, runs as the unprivileged `app` user) and `deps` → `dev`
+(dev tools + editable install + `--reload`). The `app` user is uid/gid 1000;
+pass `--build-arg UID=$(id -u) --build-arg GID=$(id -g)` on Linux if yours
+differs, so the bind mounts stay writable.
+
 ## Layers
 
 ```text
 domain          entities, value objects (Destination, AccessToken), ports incl. UnitOfWork; stdlib only
 application     use cases (sync, deliver, sync job, connect, refresh, resend, overview); depend only on domain
 infrastructure  Postgres (SQLAlchemy async, SqlUnitOfWork), Instagram Graph client, Telegram sink, media downloader
-presentation    FastAPI app, typed Services, routes, HTTP Basic auth, Jinja templates — the composition root
+presentation    typed Services, routes, Jinja templates
 ```
+
+`src/diffus/app.py` is the composition root: it builds the object graph and wires
+the FastAPI app + scheduler. `src/diffus/shared/` holds what's shared across
+bounded contexts — settings, the DB base, HTTP Basic auth, the base Jinja
+template, the scheduler bootstrap. See
+[`docs/architecture.md`](docs/architecture.md) for the full layout.
 
 ## Deployment
 

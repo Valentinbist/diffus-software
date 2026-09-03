@@ -1,0 +1,17 @@
+# Never let secrets or local state into a layer.
+.env
+.env.*
+!.env.example
+
+.git
+.github
+.venv
+infra
+docs
+*.md
+
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+dist

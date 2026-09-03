@@ -62,25 +62,37 @@ not made yet.
 ## Layout
 
 ```text
-src/connector/
-  config.py                     # pydantic-settings, env-only; read by the composition root and alembic
-  domain/                       # entities, value objects, ports, errors — stdlib only
-  application/                  # use cases; depend only on domain
-    sync_posts.py               #   poll → upsert + previews → claim → DeliverPost, per destination
-    deliver.py                  #   DeliverPost: sink registry lookup, deliver, record, commit
-    sync_job.py                 #   SyncJob: refresh token, then sync, under one lock; LastRun for the UI
-    resend_delivery.py, refresh_token.py, connect_instagram.py
-    overview.py, post_detail.py, preview.py     # read side
-  infrastructure/
-    db/                         # models, session, repositories (session-bound), uow.py (SqlUnitOfWork)
-    instagram/                  # Graph client: PostSource + AuthGateway, source = "instagram"
-    telegram/                   # render (HTML captions) + sink (PostSink)
-    media/                      # CDN download to tempdir → MediaFile
-  presentation/
-    app.py                      # composition root: lifespan builds the graph, starts the scheduler
-    services.py                 # typed Services dataclass handed to routes via Depends
-    routes.py, auth.py, display.py, templates/
-alembic/                        # 0001 initial, 0002 previews, 0003 destinations and sources
+src/diffus/
+  app.py                         # composition root: lifespan builds the graph, starts the scheduler;
+                                  # also defines health_router (/healthz)
+  shared/                        # what every bounded context uses; contexts never import each other
+    config.py                    # pydantic-settings, env-only; read by the composition root and alembic
+    db/base.py                   # `Base(DeclarativeBase)`; every context's models inherit from it
+    db/session.py                # engine / session factory construction
+    scheduler.py                 # start_scheduler(): one AsyncIOScheduler interval job
+    presentation/
+      auth.py                    # HTTP Basic auth dependency, applied to every route
+      display.py                 # German date/time/text formatting shared across contexts
+      templates.py                # build_templates(): Jinja2Templates + shared filters
+      templates/base.html
+  crossposting/                  # first bounded context — poll a source, fan out, show what happened
+    domain/                      # entities, value objects, ports, errors — stdlib only
+    application/                 # use cases; depend only on domain
+      sync_posts.py               #   poll → upsert + previews → claim → DeliverPost, per destination
+      deliver.py                  #   DeliverPost: sink registry lookup, deliver, record, commit
+      sync_job.py                 #   SyncJob: refresh token, then sync, under one lock; LastRun for the UI
+      resend_delivery.py, refresh_token.py, connect_instagram.py
+      overview.py, post_detail.py, preview.py     # read side
+    infrastructure/
+      db/                         # models (Base from shared), repositories (session-bound), uow.py
+      instagram/                  # Graph client: PostSource + AuthGateway, source = "instagram"
+      telegram/                   # render (HTML captions) + sink (PostSink)
+      media/                      # CDN download to tempdir → MediaFile
+    presentation/
+      services.py                 # typed Services dataclass handed to routes via Depends
+      routes.py, display.py, templates/            # context-specific filters + templates
+  calendar/                       # second context, in progress
+alembic/                          # 0001 initial, 0002 previews, 0003 destinations and sources
 ```
 
 ## Conventions
@@ -107,13 +119,19 @@ with a unique `source` name, emit prefixed post ids, and wire a second
 ## Bounded contexts (the backbone)
 
 Members, calendar, onboarding and whatever follows are separate bounded
-contexts, not more entities in this one. When the second context lands:
+contexts, not more entities in this one.
 
-1. Move this package to `src/diffus/crossposting/` and create
-   `src/diffus/<context>/` siblings, each with the same four layers and its own
-   `UnitOfWork`.
-2. Extract `src/diffus/shared/`: `config.py`, DB `Base` + `session.py`,
-   `presentation/auth.py`, `templates/base.html`, the scheduler bootstrap.
+**Done on 2026-09-03:** the connector package moved to
+`src/diffus/crossposting/` and `src/diffus/shared/` was extracted (`config.py`,
+DB `Base` + `session.py`, `presentation/auth.py`, `presentation/display.py`,
+`presentation/templates.py` + `templates/base.html`, `scheduler.py`). The four
+rules that govern every context from here on:
+
+1. A new context is a sibling package under `src/diffus/<context>/`, with the
+   same four layers and its own `UnitOfWork`.
+2. Shared, context-neutral code lives in `src/diffus/shared/`: settings, the
+   DB base, session construction, HTTP Basic auth, the base Jinja template and
+   filters, the scheduler bootstrap.
 3. Contexts never import each other's `domain/`, `application/` or
    `infrastructure/`. A context that needs another's data gets a port in its
    own domain and an adapter in its own infrastructure; domain events through
@@ -122,11 +140,12 @@ contexts, not more entities in this one. When the second context lands:
 4. One FastAPI app, one Alembic history, one `Services` per context mounted
    under its own router prefix.
 
-Mechanical cost of step 1, so it isn't rediscovered: every `connector.` import
-under `src/` and `tests/`; `pyproject.toml` `[project] name` (or
-`[tool.uv.build-backend] module-name`) and a `uv lock`; `Dockerfile` uvicorn
+Mechanical cost of that move, done: every `connector.` import under `src/` and
+`tests/` became `diffus.crossposting.` / `diffus.shared.` / `diffus.`;
+`pyproject.toml` `[project] name` and a `uv lock`; the `Dockerfile` uvicorn
 target; `alembic/env.py` imports; the comment in `alembic.ini`; `readme.md`.
-Compose, Ansible and the CI workflow do not reference the package path.
+Compose, Ansible and the CI workflow never referenced the package path, so
+they were untouched.
 
 ## Sharp edges
 

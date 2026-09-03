@@ -11,21 +11,22 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 
-from connector.application.connect_instagram import ConnectInstagram
-from connector.application.deliver import DeliverPost
-from connector.application.overview import GetOverview
-from connector.application.post_detail import GetPostDetail
-from connector.application.preview import GetPreview
-from connector.application.refresh_token import EnsureFreshToken
-from connector.application.resend_delivery import ResendDelivery
-from connector.application.sync_job import SyncJob
-from connector.application.sync_posts import SyncPosts
-from connector.config import get_settings
-from connector.domain.entities import Destination, MediaItem, MediaType, Post, Preview
-from connector.presentation.app import create_app, lifespan
-from connector.presentation.routes import build_templates
-from connector.presentation.services import Services
-from tests.fakes import FakeAuth, FakeMedia, FakeSink, FakeUnitOfWork, StaticSource
+from diffus.app import create_app, lifespan
+from diffus.calendar.application.sync_job import CalendarSyncJob
+from diffus.crossposting.application.connect_instagram import ConnectInstagram
+from diffus.crossposting.application.deliver import DeliverPost
+from diffus.crossposting.application.overview import GetOverview
+from diffus.crossposting.application.post_detail import GetPostDetail
+from diffus.crossposting.application.preview import GetPreview
+from diffus.crossposting.application.refresh_token import EnsureFreshToken
+from diffus.crossposting.application.resend_delivery import ResendDelivery
+from diffus.crossposting.application.sync_job import SyncJob
+from diffus.crossposting.application.sync_posts import SyncPosts
+from diffus.crossposting.domain.entities import Destination, MediaItem, MediaType, Post, Preview
+from diffus.crossposting.presentation.routes import build_templates
+from diffus.crossposting.presentation.services import Services
+from diffus.shared.config import get_settings
+from tests.crossposting.fakes import FakeAuth, FakeMedia, FakeSink, FakeUnitOfWork, StaticSource
 
 
 @pytest.fixture
@@ -53,6 +54,9 @@ async def test_lifespan_builds_the_whole_graph_without_a_database(settings_env):
             Destination("telegram", "c1"),
             Destination("telegram", "c2"),
         ]
+        # No KALENDER_DIGITAL_TOKEN in settings_env: the calendar graph is
+        # not built at all, not built-but-idle.
+        assert app.state.calendar_sync_job is None
 
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -60,6 +64,15 @@ async def test_lifespan_builds_the_whole_graph_without_a_database(settings_env):
             resp = await client.get("/healthz")
 
         assert resp.status_code == 200
+
+
+async def test_lifespan_builds_the_calendar_graph_when_a_token_is_set(settings_env, monkeypatch):
+    monkeypatch.setenv("KALENDER_DIGITAL_TOKEN", "03e3bc8e2be173ff9c8b")
+    get_settings.cache_clear()
+    app = create_app()
+
+    async with lifespan(app):
+        assert isinstance(app.state.calendar_sync_job, CalendarSyncJob)
 
 
 async def make_uow() -> FakeUnitOfWork:

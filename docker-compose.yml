@@ -1,11 +1,38 @@
+# Dev stack: builds the `dev` target and runs uvicorn --reload against the
+# bind-mounted sources. The production stack lives in infra/compose/ and uses
+# the `runtime` image from GHCR.
+#
+#   docker compose up --build        # plain: edits under src/ hot-reload
+#   docker compose up --watch        # + rebuild on pyproject.toml/uv.lock,
+#                                    #   restart on new alembic migrations
+#   docker compose exec app pytest   # tests inside the container
+
 services:
   app:
-    build: .
+    build:
+      context: .
+      target: dev
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://connector:connector@postgres:5432/connector
     ports:
       - "8000:8000"
+    volumes:
+      # Bind-mounted so uvicorn --reload sees edits without a rebuild.
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./alembic:/app/alembic
+      - ./alembic.ini:/app/alembic.ini
+    develop:
+      watch:
+        - path: pyproject.toml
+          action: rebuild
+        - path: uv.lock
+          action: rebuild
+        # The entrypoint runs `alembic upgrade head`, so a restart applies a
+        # new migration.
+        - path: alembic
+          action: restart
     depends_on:
       postgres:
         condition: service_healthy
