@@ -74,6 +74,10 @@ class EventRepository(Protocol):
         """
         ...
 
+    async def get_many(self, ids: Sequence[str]) -> dict[str, CalendarEvent]:
+        """Removed events are included."""
+        ...
+
 
 class EventLinkRepository(Protocol):
     async def add(self, event_id: str, post_id: str) -> None:
@@ -85,6 +89,10 @@ class EventLinkRepository(Protocol):
         ...
 
     async def for_events(self, event_ids: Sequence[str]) -> dict[str, list[EventLink]]: ...
+
+    async def for_posts(self, post_ids: Sequence[str]) -> dict[str, list[EventLink]]:
+        """A link is a fact: a removed event's own links still come back."""
+        ...
 
 
 class CalendarUnitOfWork(Protocol):

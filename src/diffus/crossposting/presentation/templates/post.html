@@ -7,7 +7,7 @@
 {% set post = view.post %}
 {% set title = post.caption|summary(60) %}
 
-<p class="meta kicker"><a class="plain" href="/">« Alle Posts</a></p>
+<p class="meta kicker"><a class="plain back" href="/">« Alle Posts</a></p>
 <h1 class="h1">{% if title %}{{ title }}{% else %}<span class="muted">Ohne Text</span>{% endif %}</h1>
 <p class="meta">{{ post.posted_at|when(now) }} · <a href="{{ post.permalink }}" target="_blank" rel="noopener">Auf Instagram öffnen</a></p>
 
@@ -27,6 +27,20 @@
 </div>
 
 {% if post.caption %}<p class="body caption">{{ post.caption }}</p>{% endif %}
+
+{% if calendar_enabled %}
+<section class="details">
+  <p class="eyebrow">Termine</p>
+  {% for e in view.events %}
+  <p class="body">→ <a class="plain" href="{{ e.detail_url }}" data-modal>{{ e.title or "Ohne Titel" }}, {{ e.starts_at|day(now) }}</a>{% if e.removed %} (gelöscht){% endif %}</p>
+  {% else %}
+  <p class="meta">Mit keinem Termin verknüpft.</p>
+  {% endfor %}
+  <div class="actions">
+    <a class="btn" href="/calendar/link?post={{ post.id }}" data-modal>Mit Termin verknüpfen</a>
+  </div>
+</section>
+{% endif %}
 
 <section class="details">
   <p class="eyebrow">Zustellung</p>

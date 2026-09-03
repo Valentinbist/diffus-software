@@ -190,6 +190,15 @@ class SqlEventRepository:
         grouped = await self._sub_calendar_ids([row.id for row in rows])
         return [_row_to_event(row, grouped.get(row.id, frozenset())) for row in rows]
 
+    async def get_many(self, ids: Sequence[str]) -> dict[str, CalendarEvent]:
+        if not ids:
+            return {}
+        rows = (
+            (await self._s.execute(select(EventRow).where(EventRow.id.in_(ids)))).scalars().all()
+        )
+        grouped = await self._sub_calendar_ids([row.id for row in rows])
+        return {row.id: _row_to_event(row, grouped.get(row.id, frozenset())) for row in rows}
+
     async def _sub_calendar_ids(self, event_ids: Sequence[str]) -> dict[str, frozenset[int]]:
         if not event_ids:
             return {}
@@ -231,4 +240,17 @@ class SqlEventLinkRepository:
         grouped: dict[str, list[EventLink]] = {}
         for row in result.scalars().all():
             grouped.setdefault(row.event_id, []).append(_row_to_link(row))
+        return grouped
+
+    async def for_posts(self, post_ids: Sequence[str]) -> dict[str, list[EventLink]]:
+        if not post_ids:
+            return {}
+        # No index on post_id yet (ix_calendar_event_posts_post_id lands with
+        # migration 0005); fine at today's row count, revisit if it grows.
+        result = await self._s.execute(
+            select(EventPostRow).where(EventPostRow.post_id.in_(post_ids))
+        )
+        grouped: dict[str, list[EventLink]] = {}
+        for row in result.scalars().all():
+            grouped.setdefault(row.post_id, []).append(_row_to_link(row))
         return grouped

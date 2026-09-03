@@ -148,6 +148,18 @@ def parse_month(text: str | None) -> tuple[int, int] | None:
     return year, month
 
 
+STATUS_PILLS = (("all", "Alle"), ("linked", "Mit Post"), ("unlinked", "Ohne Post"))
+
+
+def filter_by_status(views: Sequence[EventView], status: str) -> list[EventView]:
+    """Keep events with ('linked') or without ('unlinked') a post; anything else keeps all."""
+    if status == "linked":
+        return [v for v in views if v.post_status != EventPostStatus.NONE]
+    if status == "unlinked":
+        return [v for v in views if v.post_status == EventPostStatus.NONE]
+    return list(views)
+
+
 def post_status_label(status: EventPostStatus) -> str:
     return {
         EventPostStatus.NONE: "Kein Post",

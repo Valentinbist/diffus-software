@@ -1,0 +1,255 @@
+/* Tokens lifted from the diffus.space design system (tokens/*.css).
+   Two colours, one grey, one raised surface (--surface-raised) for rows,
+   the toolbar and the modal; no shadows; pills are the only curve; the
+   calendar's .dot is the one data-driven colour. */
+:root {
+  --diffus-black: #020202;
+  --diffus-white: #ffffff;
+  --diffus-grey-30: #4C4C4C;
+  --diffus-grey-95: #F2F2F2;
+
+  --surface-page: var(--diffus-black);
+  --surface-raised: #141414;
+  --text-body: var(--diffus-white);
+  --text-muted: var(--diffus-grey-30);
+  --text-invert: var(--diffus-black);
+  --border-default: rgba(255, 255, 255, 0.28);
+  --border-subtle: rgba(255, 255, 255, 0.12);
+
+  --font-display: 'Playfair Display', Georgia, Times, serif;
+  --font-body: 'Fira Sans', Helvetica, Arial, sans-serif;
+  --font-size-xs: 14px;
+  --font-size-sm: 16px;
+  --font-size-xl: 28px;
+  --line-height-body: 1.7;
+  --line-height-heading: 1.3;
+
+  --space-horizontal: 25px;
+  --width-default: 620px;
+  --radius-button: 9999px;
+  --border-width-button: 2px;
+}
+
+html { color-scheme: dark; }
+body {
+  margin: 0;
+  background: var(--surface-page);
+  color: var(--text-body);
+  font-family: var(--font-body);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-body);
+  -webkit-font-smoothing: antialiased;
+}
+main {
+  box-sizing: border-box;
+  max-width: var(--width-default);
+  margin: 0 auto;
+  padding: 52px var(--space-horizontal) 40px;
+}
+form { margin: 0; }
+a {
+  color: var(--text-body);
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+  transition: color 120ms linear;
+}
+a:hover, a:focus { color: var(--text-muted); }
+/* Row and back links: no underline, like the design system's list-title links */
+.plain { text-decoration: none; }
+
+/* Type roles, as the mockups name them */
+.h1 {
+  margin: 0;
+  font: 400 var(--font-size-xl) / var(--line-height-heading) var(--font-display);
+}
+.body { margin: 0; font-size: var(--font-size-sm); color: var(--text-body); }
+.meta { margin: 0; font-size: var(--font-size-xs); color: var(--text-muted); }
+.muted { color: var(--text-muted); }
+/* The mockups pull a line to white when it wants attention. No colour. */
+.attention { color: var(--text-body); }
+
+.kicker { margin-bottom: 6px; }
+.status { margin-top: 14px; }
+
+/* Button component: outline pill, hover goes grey, solid variant is white */
+.btn {
+  display: inline-block;
+  box-sizing: border-box;
+  font: 400 var(--font-size-sm) / 1 var(--font-body);
+  padding: 0.667em 1.333em;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  color: inherit;
+  background: transparent;
+  border: var(--border-width-button) solid currentColor;
+  border-radius: var(--radius-button);
+  transition: color 120ms linear, background-color 120ms linear, border-color 120ms linear;
+}
+.btn:hover, .btn:focus { color: var(--text-muted); }
+.btn-solid {
+  color: var(--text-invert);
+  background: var(--diffus-white);
+  border-color: var(--diffus-white);
+}
+.btn-solid:hover, .btn-solid:focus {
+  color: var(--text-invert);
+  background: var(--diffus-grey-95);
+  border-color: var(--diffus-grey-95);
+}
+.actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+
+/* Cross-context nav: Posts / Kalender, current page in body colour */
+.nav { display: flex; gap: 18px; margin-bottom: 28px; font-size: var(--font-size-xs); color: var(--text-muted); }
+.nav .current { color: var(--text-body); }
+
+/* Coloured dot: the sub-calendar's own colour, the one data-driven colour in the system */
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: var(--radius-button); vertical-align: middle; margin-right: 6px; }
+.tags { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+
+/* Calendar list/month toggle + sub-calendar filter form */
+.toggle { margin-top: 14px; }
+.filter { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; margin-top: 14px; }
+.filter label { font-size: var(--font-size-xs); }
+
+/* Agenda day heading + event row time column */
+.day-head { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border-subtle); }
+.row .time { flex: none; width: 96px; }
+.pager { display: flex; gap: 18px; margin-top: 22px; }
+
+/* Month grid: fixed seven-column table, no cards, hairline rows */
+.grid { width: 100%; table-layout: fixed; border-collapse: collapse; margin-top: 22px; font-size: var(--font-size-xs); }
+.grid th { font-weight: 500; text-align: left; padding: 6px 4px; color: var(--text-muted); }
+.grid td { vertical-align: top; height: 64px; padding: 4px; border-top: 1px solid var(--border-subtle); }
+.grid td.out { color: var(--text-muted); }
+.grid td.today .num { color: var(--text-body); text-decoration: underline; }
+.grid .ev { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-decoration: none; font-size: 12px; }
+@media (max-width: 480px) {
+  .grid .ev .t { display: none; }
+  .grid td { height: 48px; }
+  .row .time { width: 64px; }
+}
+
+/* Notice: a 28% hairline box, the only "container" in the system */
+.notice { margin-top: 22px; padding: 18px; border: 1px solid var(--border-default); }
+.notice .actions { margin-top: 16px; }
+
+/* Feed rows: poster + text, separated by 12% hairlines */
+.feed { margin-top: 28px; }
+.row {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.row:last-child { border-bottom: none; }
+.thumb { flex: none; display: block; width: 64px; height: 64px; text-decoration: none; }
+.thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.ph {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border: 1px solid var(--border-default);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.row-body { flex: 1; min-width: 0; }
+.row-body .meta { margin-top: 4px; }
+.targets { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 4px; }
+.targets .meta { margin-top: 0; }
+.fix { margin-top: 10px; }
+.fix form { margin-top: 8px; }
+.foot { margin-top: 24px; }
+
+/* Detail page: media in the flow, square and unadorned; caption as posted */
+.gallery {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  margin-top: 22px;
+}
+.gallery.single { grid-template-columns: 1fr; }
+.media { margin: 0; min-width: 0; }
+.media img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; }
+.gallery.single .media img { aspect-ratio: auto; height: auto; }
+.media .ph { width: 100%; height: auto; aspect-ratio: 1; }
+.media figcaption { margin-top: 4px; }
+.caption { margin-top: 18px; white-space: pre-line; overflow-wrap: anywhere; }
+.details { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border-subtle); }
+.eyebrow { margin: 0 0 4px; font-size: var(--font-size-xs); font-weight: 500; }
+.delivery { padding: 12px 0; border-bottom: 1px solid var(--border-subtle); }
+.delivery:last-child { border-bottom: none; }
+.delivery .meta { margin-top: 2px; }
+.delivery form { margin-top: 10px; }
+
+/* -- Round 2: header bar, rows as boxes, modals, filter pills ------------- */
+
+.topbar { border-bottom: 1px solid var(--border-subtle); }
+.topbar-inner {
+  box-sizing: border-box;
+  max-width: var(--width-default);
+  margin: 0 auto;
+  padding: 14px var(--space-horizontal);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px 18px;
+}
+.brand { font: 400 var(--font-size-sm)/1 var(--font-display); text-decoration: none; }
+.nav { display: flex; gap: 18px; margin: 0; font-size: var(--font-size-xs); color: var(--text-muted); }
+.nav .current { color: var(--text-body); }
+main { padding: 40px var(--space-horizontal) 40px; }
+
+.row {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+  background: var(--surface-raised);
+  border-bottom: none;
+}
+.row:last-child { margin-bottom: 0; }
+
+.toolbar { margin-top: 14px; padding: 14px 16px; background: var(--surface-raised); }
+.toolbar .toggle { margin-top: 0; }
+.toolbar .filter { margin-top: 10px; }
+
+.pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
+.pill {
+  display: inline-block;
+  padding: 4px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-button);
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  text-decoration: none;
+}
+.pill.current {
+  color: var(--text-invert);
+  background: var(--diffus-white);
+  border-color: var(--diffus-white);
+}
+
+/* The modal: htmx swaps a detail page's .page into #modal-body; a <dialog>
+   on the same raised surface as rows and the toolbar. Phones never open it —
+   main.ts only wires it up above the 900px breakpoint. */
+#modal {
+  box-sizing: border-box;
+  width: min(var(--width-default), calc(100vw - 2 * var(--space-horizontal)));
+  max-height: calc(100vh - 80px);
+  margin: 40px auto;
+  padding: 0;
+  border: 1px solid var(--border-default);
+  background: var(--surface-raised);
+  color: var(--text-body);
+  overflow: auto;
+}
+#modal::backdrop { background: rgba(0, 0, 0, .7); }
+.modal-inner { padding: 18px var(--space-horizontal) 32px; }
+#modal .back { display: none; }

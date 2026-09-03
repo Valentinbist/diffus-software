@@ -7,12 +7,14 @@ from diffus.crossposting.domain.entities import (
     Delivery,
     DeliveryStatus,
     Destination,
+    LinkedEvent,
     MediaItem,
     MediaType,
     Post,
 )
 from diffus.crossposting.presentation.display import (
     delivery_label,
+    filter_by_events,
     sink_label,
     stored_cover,
     target_label,
@@ -57,3 +59,26 @@ def test_target_label_combines_sink_label_and_address():
     delivery = Delivery(post_id="p", destination=Destination("signal", "+49151"))
 
     assert target_label(delivery) == "Signal +49151"
+
+
+def make_post_view(post_id: str, events: list[LinkedEvent] | None = None) -> PostView:
+    post = Post(
+        id=post_id,
+        source="instagram",
+        caption=None,
+        permalink=f"https://instagram.com/p/{post_id}/",
+        media=(),
+        posted_at=NOW,
+    )
+    return PostView(post=post, deliveries=[], events=events or [])
+
+
+def test_filter_by_events_keeps_only_linked_or_only_unlinked_posts():
+    event = LinkedEvent(id="e1", title="Plenum", starts_at=NOW, detail_url="/calendar/events/e1")
+    linked = make_post_view("p1", events=[event])
+    unlinked = make_post_view("p2")
+
+    assert filter_by_events([linked, unlinked], "with") == [linked]
+    assert filter_by_events([linked, unlinked], "without") == [unlinked]
+    assert filter_by_events([linked, unlinked], "all") == [linked, unlinked]
+    assert filter_by_events([linked, unlinked], "garbage") == [linked, unlinked]

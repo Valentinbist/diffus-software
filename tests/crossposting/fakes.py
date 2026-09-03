@@ -20,6 +20,7 @@ from diffus.crossposting.domain.entities import (
     AccessToken,
     Delivery,
     Destination,
+    LinkedEvent,
     MediaFile,
     Post,
     Preview,
@@ -173,6 +174,16 @@ class FakeTokens:
     async def save(self, token: Token) -> None:
         self._tokens[token.source] = token
         self.dirty = True
+
+
+class FakeEventDirectory:
+    """EventDirectory over a fixed mapping, the way a real calendar-context adapter would answer."""
+
+    def __init__(self, mapping: dict[str, list[LinkedEvent]] | None = None) -> None:
+        self.mapping = mapping or {}
+
+    async def for_posts(self, post_ids: Sequence[str]) -> dict[str, list[LinkedEvent]]:
+        return {post_id: self.mapping[post_id] for post_id in post_ids if post_id in self.mapping}
 
 
 class FakeAuth:

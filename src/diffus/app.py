@@ -6,14 +6,18 @@ import functools
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from diffus.calendar.application.calendar_events import GetCalendarEvents
 from diffus.calendar.application.event_detail import GetEventDetail
 from diffus.calendar.application.link_event_post import LinkEventPost
+from diffus.calendar.application.link_picker import GetLinkPicker
+from diffus.calendar.application.linked_events import GetLinkedEvents
 from diffus.calendar.application.sync_calendar import SyncCalendar
 from diffus.calendar.application.sync_job import CalendarSyncJob
 from diffus.calendar.infrastructure.crossposting import CrosspostingPostCatalog
@@ -24,7 +28,7 @@ from diffus.calendar.presentation.routes import router as calendar_router
 from diffus.calendar.presentation.services import CalendarServices
 from diffus.crossposting.application.connect_instagram import ConnectInstagram
 from diffus.crossposting.application.deliver import DeliverPost
-from diffus.crossposting.application.overview import GetOverview
+from diffus.crossposting.application.overview import GetOverview, NoEvents
 from diffus.crossposting.application.post_detail import GetPostDetail
 from diffus.crossposting.application.preview import GetPreview
 from diffus.crossposting.application.refresh_token import EnsureFreshToken
@@ -32,6 +36,8 @@ from diffus.crossposting.application.resend_delivery import ResendDelivery
 from diffus.crossposting.application.sync_job import SyncJob
 from diffus.crossposting.application.sync_posts import SyncPosts
 from diffus.crossposting.domain.entities import Destination
+from diffus.crossposting.domain.ports import EventDirectory
+from diffus.crossposting.infrastructure.calendar import CalendarEventDirectory
 from diffus.crossposting.infrastructure.db.uow import SqlUnitOfWork
 from diffus.crossposting.infrastructure.instagram.client import InstagramClient
 from diffus.crossposting.infrastructure.media.downloader import HttpMediaGateway
@@ -44,6 +50,10 @@ from diffus.shared.scheduler import start_scheduler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Built by `web/` (npm run build) into shared/presentation/static/dist; see
+# shared/presentation/assets.py for how base.html resolves the hashed files.
+STATIC_DIR = Path(__file__).parent / "shared" / "presentation" / "static"
 
 # Unauthenticated on purpose: container and uptime probes can't carry Basic auth
 # credentials. It reports liveness only — never connection or delivery state.
@@ -90,8 +100,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     job = SyncJob(sync=sync, refresh=EnsureFreshToken(auth=instagram, uow=uow))
 
     tz = ZoneInfo(settings.display_timezone)
-    overview = GetOverview(uow=uow, source=instagram.source)
-    detail = GetPostDetail(uow=uow)
+
+    # The calendar is an optional second context: an empty token means no
+    # calendar graph is built at all, not a graph that quietly does nothing.
+    # Its unit of work is built here, before the crossposting read side, so
+    # GetOverview/GetPostDetail can be given a real EventDirectory instead of
+    # wiring it in after the fact.
+    calendar_uow = None
+    events: EventDirectory = NoEvents()
+    if settings.calendar_enabled:
+        calendar_uow = functools.partial(SqlCalendarUnitOfWork, session_factory)
+        # The one exception to "contexts never import each other's
+        # application layer": a context's adapter may call another context's
+        # application read use cases (see docs/architecture.md, Bounded contexts).
+        events = CalendarEventDirectory(linked=GetLinkedEvents(uow=calendar_uow))
+
+    overview = GetOverview(uow=uow, source=instagram.source, events=events)
+    detail = GetPostDetail(uow=uow, events=events)
 
     app.state.services = Services(
         sync_job=job,
@@ -104,11 +129,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         templates=build_templates(tz, calendar_enabled=settings.calendar_enabled),
     )
 
-    # The calendar is an optional second context: an empty token means no
-    # calendar graph is built at all, not a graph that quietly does nothing.
     calendar_services: CalendarServices | None = None
     if settings.calendar_enabled:
-        calendar_uow = functools.partial(SqlCalendarUnitOfWork, session_factory)
+        assert calendar_uow is not None
         calendar_gateway = KalenderDigitalClient(
             http,
             token=settings.kalender_digital_token,
@@ -120,15 +143,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             past_months=settings.calendar_past_months,
             future_months=settings.calendar_future_months,
         )
-        # The one exception to "contexts never import each other's
-        # application layer": a context's application read side is its
-        # public API (see docs/architecture.md, Bounded contexts).
+        # Same exception, the other way round: the calendar's own adapter
+        # over crossposting's read use cases.
         catalog = CrosspostingPostCatalog(overview=overview, detail=detail)
         calendar_services = CalendarServices(
             sync_job=CalendarSyncJob(sync_calendar),
             calendar=GetCalendarEvents(uow=calendar_uow, posts=catalog, tz=tz),
             event_detail=GetEventDetail(uow=calendar_uow, posts=catalog, tz=tz),
             link_post=LinkEventPost(uow=calendar_uow, posts=catalog),
+            link_picker=GetLinkPicker(uow=calendar_uow, posts=catalog, tz=tz),
             tz=tz,
             templates=build_calendar_templates(tz, calendar_enabled=True),
         )
@@ -168,6 +191,9 @@ def create_app(
     # Always mounted: get_calendar_services (its Depends) 404s when the
     # context is off, so the route table doesn't change with the feature flag.
     app.include_router(calendar_router)
+    # Public, no auth: the built CSS/JS is not sensitive, and gating it behind
+    # Basic auth would break the login-less error pages that link to it.
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR), check_dir=False), name="static")
     return app
 
 

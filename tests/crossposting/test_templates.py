@@ -12,11 +12,13 @@ from diffus.crossposting.domain.entities import (
     Delivery,
     DeliveryStatus,
     Destination,
+    LinkedEvent,
     MediaItem,
     MediaType,
     Post,
     Token,
 )
+from diffus.crossposting.presentation import display
 from diffus.crossposting.presentation.routes import build_templates
 
 templates = build_templates(ZoneInfo("Europe/Berlin"))
@@ -59,10 +61,15 @@ def make_post(
 
 
 def render_index(
-    ov: Overview, last_run: LastRun | None = None, multi_target: bool = False
+    ov: Overview, last_run: LastRun | None = None, multi_target: bool = False, events: str = "all"
 ) -> str:
     return templates.env.get_template("index.html").render(
-        ov=ov, now=NOW, last_run=last_run, multi_target=multi_target
+        ov=ov,
+        now=NOW,
+        last_run=last_run,
+        multi_target=multi_target,
+        events=events,
+        event_pills=display.EVENT_PILLS,
     )
 
 
@@ -236,7 +243,7 @@ def test_detail_page_without_deliveries_says_so():
     assert "Noch an keinen Kanal zugestellt." in html
 
 
-# -- nav ------------------------------------------------------------------------
+# -- nav + header + modal --------------------------------------------------------
 
 
 def test_nav_shows_the_calendar_link_only_when_the_calendar_context_is_enabled():
@@ -244,9 +251,93 @@ def test_nav_shows_the_calendar_link_only_when_the_calendar_context_is_enabled()
     enabled = build_templates(ZoneInfo("Europe/Berlin"), calendar_enabled=True)
 
     with_calendar = enabled.env.get_template("index.html").render(
-        ov=ov, now=NOW, last_run=None, multi_target=False
+        ov=ov,
+        now=NOW,
+        last_run=None,
+        multi_target=False,
+        events="all",
+        event_pills=display.EVENT_PILLS,
     )
     without_calendar = render_index(ov)
 
     assert 'href="/calendar"' in with_calendar
     assert 'href="/calendar"' not in without_calendar
+
+
+def test_base_layout_has_the_topbar_brand_and_modal_dialog():
+    html = render_index(Overview(token=None, posts=[]))
+
+    assert 'class="topbar"' in html
+    assert ">diffus.space<" in html
+    assert '<dialog id="modal"' in html
+    assert '<div class="page">' in html
+    assert 'href="/static/dist/' in html
+
+
+def test_thumb_and_title_links_open_in_the_modal():
+    view = PostView(post=make_post(), deliveries=[])
+
+    html = render_index(connected(view))
+
+    assert html.count("data-modal") >= 2
+
+
+def test_post_detail_kicker_back_link_is_hidden_inside_the_modal():
+    html = render_post(PostView(post=make_post(), deliveries=[]))
+
+    assert '<a class="plain back" href="/">« Alle Posts</a>' in html
+
+
+# -- event filter pills and linked events ----------------------------------------
+
+
+def test_event_pills_show_only_when_the_calendar_context_is_enabled():
+    ov = Overview(token=None, posts=[])
+    enabled = build_templates(ZoneInfo("Europe/Berlin"), calendar_enabled=True)
+
+    with_calendar = enabled.env.get_template("index.html").render(
+        ov=ov,
+        now=NOW,
+        last_run=None,
+        multi_target=False,
+        events="with",
+        event_pills=display.EVENT_PILLS,
+    )
+
+    assert '<span class="pill current">Mit Termin</span>' in with_calendar
+    assert 'href="/?events=without"' in with_calendar
+    assert 'href="/?events=with"' not in render_index(ov)  # disabled: no pills at all
+
+
+def test_index_row_lists_linked_events_and_marks_a_removed_one():
+    event = LinkedEvent(id="e1", title="Plenum", starts_at=NOW, detail_url="/calendar/events/e1")
+    removed = LinkedEvent(
+        id="e2", title="Alte Reihe", starts_at=NOW, detail_url="/calendar/events/e2", removed=True
+    )
+    view = PostView(post=make_post(), deliveries=[], events=[event, removed])
+
+    html = render_index(connected(view))
+
+    assert 'href="/calendar/events/e1" data-modal>Plenum, Heute</a>' in html
+    assert "Alte Reihe, Heute</a> (gelöscht)" in html
+
+
+def test_post_detail_termine_section_and_link_button_only_when_calendar_enabled():
+    event = LinkedEvent(id="e1", title="Plenum", starts_at=NOW, detail_url="/calendar/events/e1")
+    linked_view = PostView(post=make_post(), deliveries=[], events=[event])
+    empty_view = PostView(post=make_post(), deliveries=[])
+    enabled = build_templates(ZoneInfo("Europe/Berlin"), calendar_enabled=True)
+
+    with_event = enabled.env.get_template("post.html").render(
+        view=linked_view, now=NOW, multi_target=False
+    )
+    without_event = enabled.env.get_template("post.html").render(
+        view=empty_view, now=NOW, multi_target=False
+    )
+    disabled = render_post(empty_view)
+
+    assert "Termine" in with_event
+    assert "Plenum, Heute" in with_event
+    assert 'href="/calendar/link?post=p1" data-modal>Mit Termin verknüpfen</a>' in with_event
+    assert "Mit keinem Termin verknüpft." in without_event
+    assert "Mit Termin verknüpfen" not in disabled

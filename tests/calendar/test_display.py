@@ -10,6 +10,7 @@ from diffus.calendar.application.suggest_posts import SuggestionReason
 from diffus.calendar.domain.entities import CalendarEvent
 from diffus.calendar.presentation.display import (
     by_day,
+    filter_by_status,
     format_agenda_day,
     format_event_time,
     month_grid,
@@ -207,6 +208,20 @@ def test_post_status_label_text():
     assert post_status_label(EventPostStatus.NONE) == "Kein Post"
     assert post_status_label(EventPostStatus.LINKED) == "Post verknüpft"
     assert post_status_label(EventPostStatus.DELIVERED) == "Post verknüpft · zugestellt ✓"
+
+
+def test_filter_by_status_keeps_only_linked_or_only_unlinked_events():
+    linked = make_view(make_event(datetime(2026, 9, 1, tzinfo=UTC)))
+    linked.post_status = EventPostStatus.LINKED
+    delivered = make_view(make_event(datetime(2026, 9, 2, tzinfo=UTC)))
+    delivered.post_status = EventPostStatus.DELIVERED
+    unlinked = make_view(make_event(datetime(2026, 9, 3, tzinfo=UTC)))
+
+    views = [linked, delivered, unlinked]
+    assert filter_by_status(views, "linked") == [linked, delivered]
+    assert filter_by_status(views, "unlinked") == [unlinked]
+    assert filter_by_status(views, "all") == views
+    assert filter_by_status(views, "garbage") == views
 
 
 def test_reason_label_text():

@@ -18,33 +18,42 @@
   <form method="post" action="/calendar/sync"><button type="submit" class="btn">Jetzt abgleichen</button></form>
 </div>
 
-<p class="meta toggle">
-  {% if view == "agenda" %}Liste{% else %}<a class="plain" href="/calendar?view=agenda{{ cal_qs }}">Liste</a>{% endif %}
-  ·
-  {% if view == "month" %}Monat{% else %}<a class="plain" href="/calendar?view=month{{ cal_qs }}">Monat</a>{% endif %}
-</p>
+<div class="toolbar">
+  <p class="meta toggle">
+    {% if view == "agenda" %}Liste{% else %}<a class="plain" href="/calendar?view=agenda{{ cal_qs }}{{ status_qs }}">Liste</a>{% endif %}
+    ·
+    {% if view == "month" %}Monat{% else %}<a class="plain" href="/calendar?view=month{{ cal_qs }}{{ status_qs }}">Monat</a>{% endif %}
+  </p>
 
-<form method="get" action="/calendar" class="filter">
-  <input type="hidden" name="view" value="{{ view }}">
-  {% if view == "month" %}
-  <input type="hidden" name="month" value="{{ month_value }}">
-  {% else %}
-  <input type="hidden" name="from" value="{{ from_day.isoformat() }}">
-  {% endif %}
-  {% for sc in page.sub_calendars %}
-  <label>
-    <input type="checkbox" name="cal" value="{{ sc.id }}" {% if sc.id in selected %}checked{% endif %}>
-    <span class="dot" style="background:{{ sc.color }}"></span>{{ sc.name }}
-  </label>
-  {% endfor %}
-  <button type="submit" class="btn">Filtern</button>
-</form>
+  <form method="get" action="/calendar" class="filter">
+    <input type="hidden" name="view" value="{{ view }}">
+    {% if view == "month" %}
+    <input type="hidden" name="month" value="{{ month_value }}">
+    {% else %}
+    <input type="hidden" name="from" value="{{ from_day.isoformat() }}">
+    {% endif %}
+    <input type="hidden" name="status" value="{{ status }}">
+    {% for sc in page.sub_calendars %}
+    <label>
+      <input type="checkbox" name="cal" value="{{ sc.id }}" {% if sc.id in selected %}checked{% endif %}>
+      <span class="dot" style="background:{{ sc.color }}"></span>{{ sc.name }}
+    </label>
+    {% endfor %}
+    <button type="submit" class="btn">Filtern</button>
+  </form>
+
+  <p class="pills">
+    {% for value, label in status_pills %}
+    {% if value == status %}<span class="pill current">{{ label }}</span>{% else %}<a class="pill" href="/calendar?view={{ view }}{% if view == "month" %}&month={{ month_value }}{% else %}&from={{ from_day.isoformat() }}{% endif %}{{ cal_qs }}{% if value != "all" %}&status={{ value }}{% endif %}">{{ label }}</a>{% endif %}
+    {% endfor %}
+  </p>
+</div>
 
 {% if view == "month" %}
 <p class="meta nav-month">
-  <a class="plain" href="/calendar?view=month&month={{ grid.prev }}{{ cal_qs }}">« {{ grid.prev|month_label }}</a>
+  <a class="plain" href="/calendar?view=month&month={{ grid.prev }}{{ cal_qs }}{{ status_qs }}">« {{ grid.prev|month_label }}</a>
   · {{ grid.label }} ·
-  <a class="plain" href="/calendar?view=month&month={{ grid.next }}{{ cal_qs }}">{{ grid.next|month_label }} »</a>
+  <a class="plain" href="/calendar?view=month&month={{ grid.next }}{{ cal_qs }}{{ status_qs }}">{{ grid.next|month_label }} »</a>
 </p>
 <table class="grid">
   <thead>
@@ -55,9 +64,9 @@
     <tr>
       {% for d in week %}
       <td class="{{ 'out' if not d.in_month }}{{ ' today' if d.is_today }}">
-        <a class="num plain" href="/calendar?from={{ d.day.isoformat() }}{{ cal_qs }}">{{ d.day.day }}</a>
+        <a class="num plain" href="/calendar?from={{ d.day.isoformat() }}{{ cal_qs }}{{ status_qs }}">{{ d.day.day }}</a>
         {% for v in d.events %}
-        <a class="ev" href="/calendar/events/{{ v.event.id }}" title="{{ v.event.title or 'Ohne Titel' }}">
+        <a class="ev" href="/calendar/events/{{ v.event.id }}" title="{{ v.event.title or 'Ohne Titel' }}" data-modal>
           {% for sc in v.sub_calendars %}<span class="dot" style="background:{{ sc.color }}"></span>{% endfor -%}
           {%- if v.post_status.value == "delivered" %}✓ {% elif v.post_status.value == "linked" %}○ {% endif -%}
           <span class="t">{{ v.event.title or "Ohne Titel" }}</span>
@@ -76,7 +85,7 @@
 <article class="row">
   <p class="meta time">{{ v.event|event_time }}</p>
   <div class="row-body">
-    <p class="body"><a class="plain" href="/calendar/events/{{ v.event.id }}">{{ v.event.title or "Ohne Titel" }}</a></p>
+    <p class="body"><a class="plain" href="/calendar/events/{{ v.event.id }}" data-modal>{{ v.event.title or "Ohne Titel" }}</a></p>
     <p class="meta tags">
       {% for sc in v.sub_calendars %}<span><span class="dot" style="background:{{ sc.color }}"></span>{{ sc.name }}</span>{% endfor %}
     </p>
@@ -88,9 +97,9 @@
 <p class="meta">Keine Termine in diesem Zeitraum.</p>
 {% endfor %}
 <p class="meta pager">
-  <a class="plain" href="/calendar?view=agenda&from={{ prev_from.isoformat() }}{{ cal_qs }}">« Früher</a>
-  <a class="plain" href="/calendar?view=agenda{{ cal_qs }}">Heute</a>
-  <a class="plain" href="/calendar?view=agenda&from={{ next_from.isoformat() }}{{ cal_qs }}">Später »</a>
+  <a class="plain" href="/calendar?view=agenda&from={{ prev_from.isoformat() }}{{ cal_qs }}{{ status_qs }}">« Früher</a>
+  <a class="plain" href="/calendar?view=agenda{{ cal_qs }}{{ status_qs }}">Heute</a>
+  <a class="plain" href="/calendar?view=agenda&from={{ next_from.isoformat() }}{{ cal_qs }}{{ status_qs }}">Später »</a>
 </p>
 {% endif %}
 {% endblock %}

@@ -36,6 +36,21 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      web:
+        condition: service_started
+    restart: unless-stopped
+
+  # Rebuilds web/ into src/diffus/shared/presentation/static/dist on every
+  # save; uvicorn --reload (via --reload-include manifest.json) picks up the
+  # new manifest and app.py's assets.py re-reads it on the next request.
+  web:
+    image: node:22-alpine
+    working_dir: /app/web
+    command: sh -c "npm install && npm run watch"
+    volumes:
+      - ./web:/app/web
+      - ./src:/app/src
+      - web_node_modules:/app/web/node_modules
     restart: unless-stopped
 
   postgres:
@@ -58,3 +73,6 @@ services:
 
 volumes:
   pgdata:
+  # Named, not bind-mounted: node_modules holds Linux binaries and must not
+  # be shared with the host's (possibly macOS/arm64) node_modules.
+  web_node_modules:

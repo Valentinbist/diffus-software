@@ -18,6 +18,7 @@ from typing import Protocol, Self
 from diffus.crossposting.domain.entities import (
     Delivery,
     Destination,
+    LinkedEvent,
     MediaFile,
     Post,
     Preview,
@@ -94,6 +95,12 @@ class TokenRepository(Protocol):
     async def get(self, source: str) -> Token | None: ...
 
     async def save(self, token: Token) -> None: ...
+
+
+class EventDirectory(Protocol):
+    """Read-only window onto the calendar context's events, keyed by post."""
+
+    async def for_posts(self, post_ids: Sequence[str]) -> dict[str, list[LinkedEvent]]: ...
 
 
 class UnitOfWork(Protocol):

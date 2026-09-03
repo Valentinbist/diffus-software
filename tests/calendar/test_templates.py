@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from diffus.calendar.application.calendar_events import CalendarPage, EventPostStatus, EventView
 from diffus.calendar.application.event_detail import EventDetail, SuggestedPost
+from diffus.calendar.application.link_picker import LinkPicker, LinkPickerEvent
 from diffus.calendar.application.suggest_posts import SuggestionReason
 from diffus.calendar.application.sync_job import CalendarLastRun
 from diffus.calendar.domain.entities import CalendarEvent, EventLink, LinkablePost, SubCalendar
@@ -94,6 +95,9 @@ def agenda_context(**overrides) -> dict:
         "cal_qs": f"&cal={SUB_CALENDAR.id}",
         "now": NOW,
         "last_run": CalendarLastRun(at=NOW - timedelta(minutes=5)),
+        "status": "all",
+        "status_qs": "",
+        "status_pills": display.STATUS_PILLS,
     }
     context.update(overrides)
     return context
@@ -148,6 +152,9 @@ def test_month_view_renders_a_35_cell_grid_with_a_delivered_event_marked():
         "now": NOW,
         "last_run": None,
         "month_value": "2026-09",
+        "status": "all",
+        "status_qs": "",
+        "status_pills": display.STATUS_PILLS,
     }
 
     html = render_calendar(context)
@@ -155,6 +162,7 @@ def test_month_view_renders_a_35_cell_grid_with_a_delivered_event_marked():
     assert '<table class="grid"' in html
     assert html.count("<td") == 35
     assert 'href="/calendar/events/e1"' in html
+    assert "data-modal" in html
     assert "✓ " in html
 
 
@@ -226,3 +234,70 @@ def test_the_capability_token_never_leaks_into_rendered_html():
 
     assert TOKEN not in agenda_html
     assert TOKEN not in event_html
+
+
+def test_base_layout_has_the_topbar_brand_and_modal_dialog():
+    html = render_event(event_context())
+
+    assert 'class="topbar"' in html
+    assert ">diffus.space<" in html
+    assert '<dialog id="modal"' in html
+    assert '<div class="page">' in html
+    assert 'href="/static/dist/' in html
+
+
+# -- status filter pills -----------------------------------------------------------
+
+
+def test_status_pills_mark_the_current_filter_and_link_to_the_others():
+    html = render_calendar(agenda_context(status="linked"))
+
+    assert '<span class="pill current">Mit Post</span>' in html
+    assert (
+        'href="/calendar?view=agenda&from=2026-09-03&amp;cal=5298948&status=unlinked"' in html
+    )
+    assert 'href="/calendar?view=agenda&from=2026-09-03&amp;cal=5298948">Alle</a>' in html
+
+
+def test_agenda_and_pager_links_carry_the_status_filter():
+    html = render_calendar(agenda_context(status="unlinked", status_qs="&status=unlinked"))
+
+    assert "status=unlinked" in html
+    assert html.count("status=unlinked") >= 3  # toggle + both pager directions + Heute
+
+
+# -- link picker page ---------------------------------------------------------------
+
+
+def make_link_picker() -> LinkPicker:
+    post = make_post("p1", caption="Siebdruck-Nachmittag")
+    suggested = make_event(event_id="e-sugg", starts_at=datetime(2026, 9, 5, 16, 0, tzinfo=UTC))
+    upcoming = make_event(event_id="e-up", starts_at=datetime(2026, 9, 20, 16, 0, tzinfo=UTC))
+    return LinkPicker(
+        post=post,
+        suggestions=[
+            LinkPickerEvent(
+                event=suggested,
+                sub_calendars=[SUB_CALENDAR],
+                reasons=(SuggestionReason.RECENT,),
+                linked=False,
+            )
+        ],
+        events=[
+            LinkPickerEvent(
+                event=upcoming, sub_calendars=[SUB_CALENDAR], reasons=(), linked=True
+            )
+        ],
+    )
+
+
+def test_link_picker_page_shows_suggestions_and_the_upcoming_list():
+    html = templates.env.get_template("link.html").render(picker=make_link_picker(), now=NOW)
+
+    assert "Mit Termin verknüpfen" in html
+    assert "Siebdruck-Nachmittag" in html
+    assert "Vorschläge" in html
+    assert "Kurz vor dem Termin gepostet" in html
+    assert "Termine der nächsten 60 Tage" in html
+    assert "Verknüpft ✓" in html
+    assert '<a class="plain back" href="/posts/p1">« Zum Post</a>' in html

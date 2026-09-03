@@ -6,7 +6,7 @@
 {% block content %}
 {% set ev = detail.view.event %}
 
-<p class="meta kicker"><a class="plain" href="/calendar?from={{ back_from }}">« Kalender</a></p>
+<p class="meta kicker"><a class="plain back" href="/calendar?from={{ back_from }}">« Kalender</a></p>
 <h1 class="h1">{% if ev.title %}{{ ev.title }}{% else %}<span class="muted">Ohne Titel</span>{% endif %}</h1>
 <p class="meta">{{ ev.starts_at|day(now) }} · {{ ev|event_time }}{% if ev.location %} · {{ ev.location }}{% endif %}</p>
 <p class="meta tags">
@@ -26,11 +26,11 @@
   <p class="eyebrow">Verknüpfte Posts</p>
   {% for p in detail.linked %}
   <article class="row">
-    <a class="thumb" href="{{ p.detail_url }}">
+    <a class="thumb" href="{{ p.detail_url }}" data-modal>
       {% if p.thumbnail_url %}<img src="{{ p.thumbnail_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% else %}<span class="ph">Bild</span>{% endif %}
     </a>
     <div class="row-body">
-      <p class="body"><a class="plain" href="{{ p.detail_url }}">{{ (p.caption|summary) or "Ohne Text" }}</a></p>
+      <p class="body"><a class="plain" href="{{ p.detail_url }}" data-modal>{{ (p.caption|summary) or "Ohne Text" }}</a></p>
       <p class="meta">{{ p.posted_at|when(now) }} · {% if p.delivered %}zugestellt ✓{% else %}noch nicht zugestellt{% endif %}</p>
       <form method="post" action="/calendar/events/{{ ev.id }}/unlink">
         <input type="hidden" name="post_id" value="{{ p.id }}">
@@ -49,11 +49,11 @@
   {% for s in detail.suggestions %}
   {% set p = s.post %}
   <article class="row">
-    <a class="thumb" href="{{ p.detail_url }}">
+    <a class="thumb" href="{{ p.detail_url }}" data-modal>
       {% if p.thumbnail_url %}<img src="{{ p.thumbnail_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% else %}<span class="ph">Bild</span>{% endif %}
     </a>
     <div class="row-body">
-      <p class="body"><a class="plain" href="{{ p.detail_url }}">{{ (p.caption|summary) or "Ohne Text" }}</a></p>
+      <p class="body"><a class="plain" href="{{ p.detail_url }}" data-modal>{{ (p.caption|summary) or "Ohne Text" }}</a></p>
       <p class="meta">{{ s.reasons|map("reason_label")|join(" · ") }}</p>
       <form method="post" action="/calendar/events/{{ ev.id }}/link">
         <input type="hidden" name="post_id" value="{{ p.id }}">
@@ -70,11 +70,11 @@
   <p class="eyebrow">Weitere Posts</p>
   {% for p in detail.recent %}
   <article class="row">
-    <a class="thumb" href="{{ p.detail_url }}">
+    <a class="thumb" href="{{ p.detail_url }}" data-modal>
       {% if p.thumbnail_url %}<img src="{{ p.thumbnail_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% else %}<span class="ph">Bild</span>{% endif %}
     </a>
     <div class="row-body">
-      <p class="body"><a class="plain" href="{{ p.detail_url }}">{{ (p.caption|summary) or "Ohne Text" }}</a></p>
+      <p class="body"><a class="plain" href="{{ p.detail_url }}" data-modal>{{ (p.caption|summary) or "Ohne Text" }}</a></p>
       <p class="meta">{{ p.posted_at|when(now) }} · {% if p.delivered %}zugestellt ✓{% else %}noch nicht zugestellt{% endif %}</p>
       <form method="post" action="/calendar/events/{{ ev.id }}/link">
         <input type="hidden" name="post_id" value="{{ p.id }}">

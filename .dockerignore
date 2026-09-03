@@ -11,7 +11,10 @@ docs
 *.md
 
 __pycache__
+**/__pycache__
 *.pyc
 .pytest_cache
 .ruff_cache
 dist
+web/node_modules
+src/diffus/shared/presentation/static/dist

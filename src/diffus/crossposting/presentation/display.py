@@ -6,6 +6,8 @@ into Jinja as filters by presentation/routes.py.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from diffus.crossposting.application.overview import PostView
 from diffus.crossposting.domain.entities import Delivery, DeliveryStatus
 
@@ -13,6 +15,17 @@ from diffus.crossposting.domain.entities import Delivery, DeliveryStatus
 # its name, capitalized, so a new adapter renders sanely before display.py
 # is ever updated for it.
 SINK_LABELS = {"telegram": "Telegram"}
+
+EVENT_PILLS = (("all", "Alle"), ("with", "Mit Termin"), ("without", "Ohne Termin"))
+
+
+def filter_by_events(views: Sequence[PostView], mode: str) -> list[PostView]:
+    """Keep posts with ('with') or without ('without') a linked event; anything else keeps all."""
+    if mode == "with":
+        return [v for v in views if v.events]
+    if mode == "without":
+        return [v for v in views if not v.events]
+    return list(views)
 
 # What a delivery row says after the sink/target label. The mockups use ✓ / ✕ and plain words.
 STATUS_TEXT = {

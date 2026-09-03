@@ -4,18 +4,19 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from diffus.crossposting.application.overview import GetOverview
+from diffus.crossposting.application.overview import GetOverview, NoEvents
 from diffus.crossposting.application.post_detail import GetPostDetail
 from diffus.crossposting.domain.entities import (
     Delivery,
     DeliveryStatus,
     Destination,
+    LinkedEvent,
     MediaItem,
     MediaType,
     Post,
     Preview,
 )
-from tests.crossposting.fakes import FakeUnitOfWork
+from tests.crossposting.fakes import FakeEventDirectory, FakeUnitOfWork
 
 
 def make_post(post_id: str, minute: int = 0) -> Post:
@@ -68,3 +69,48 @@ async def test_detail_returns_one_post_or_nothing():
     assert view.deliveries[0].destination == Destination("telegram", "chat1")
     assert view.stored_previews == frozenset({0})
     assert missing is None
+
+
+# -- linked events --------------------------------------------------------------
+
+
+async def test_overview_attaches_linked_events_from_the_event_directory():
+    uow = await make_uow()
+    event = LinkedEvent(
+        id="e1",
+        title="Plenum",
+        starts_at=datetime.now(UTC),
+        detail_url="/calendar/events/e1",
+    )
+    overview = GetOverview(uow=uow, source="instagram", events=FakeEventDirectory({"new": [event]}))
+
+    result = await overview.run()
+
+    new, old = result.posts
+    assert new.events == [event]
+    assert old.events == []
+
+
+async def test_overview_defaults_to_no_events_when_the_calendar_is_disabled():
+    uow = await make_uow()
+    overview = GetOverview(uow=uow, source="instagram", events=NoEvents())
+
+    result = await overview.run()
+
+    assert all(view.events == [] for view in result.posts)
+
+
+async def test_detail_attaches_linked_events_from_the_event_directory():
+    uow = await make_uow()
+    event = LinkedEvent(
+        id="e1",
+        title="Plenum",
+        starts_at=datetime.now(UTC),
+        detail_url="/calendar/events/e1",
+    )
+    detail = GetPostDetail(uow=uow, events=FakeEventDirectory({"new": [event]}))
+
+    view = await detail.run("new")
+
+    assert view is not None
+    assert view.events == [event]

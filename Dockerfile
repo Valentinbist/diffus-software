@@ -2,14 +2,22 @@
 #
 # Stages (build with --target):
 #   base     python + unprivileged `app` user, nothing else
+#   web      node: builds web/ into shared/presentation/static/dist (a manifest.json)
 #   deps     third-party packages only; cached until pyproject.toml/uv.lock change
-#   builder  deps + the project installed as a real (non-editable) wheel
+#   builder  deps + the built static assets + the project as a real (non-editable) wheel
 #   dev      deps + dev tools, project editable, uvicorn --reload  -> docker-compose.yml
 #   runtime  what ships: base + the venv from builder, no uv, no sources  -> CI / GHCR
 #
 # Bump the two pins together with .tool-versions / .python-version.
 
 FROM ghcr.io/astral-sh/uv:0.11.33 AS uv
+
+FROM node:22-alpine AS web
+WORKDIR /build/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
 
 FROM python:3.14-slim-trixie AS base
 # Match the host user on Linux so bind mounts in dev are writable; harmless elsewhere.
@@ -37,6 +45,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 FROM deps AS builder
 COPY src ./src
+COPY --from=web /build/src/diffus/shared/presentation/static/dist ./src/diffus/shared/presentation/static/dist
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable
 
@@ -60,7 +69,8 @@ USER app
 EXPOSE 8000
 ENTRYPOINT ["entrypoint"]
 CMD ["uvicorn", "diffus.app:app", "--host", "0.0.0.0", "--port", "8000", \
-     "--reload", "--reload-dir", "/app/src", "--reload-include", "*.html"]
+     "--reload", "--reload-dir", "/app/src", "--reload-include", "*.html", \
+     "--reload-include", "manifest.json"]
 
 
 FROM base AS runtime

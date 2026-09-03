@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% set active_page = "posts" %}
+
+{% block title %}Mit Termin verknüpfen – Kalender{% endblock %}
+
+{% block content %}
+<p class="meta kicker"><a class="plain back" href="/posts/{{ picker.post.id }}">« Zum Post</a></p>
+<h1 class="h1">Mit Termin verknüpfen</h1>
+
+<article class="row">
+  <a class="thumb" href="{{ picker.post.detail_url }}" data-modal>
+    {% if picker.post.thumbnail_url %}<img src="{{ picker.post.thumbnail_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% else %}<span class="ph">Bild</span>{% endif %}
+  </a>
+  <div class="row-body">
+    <p class="body">{{ (picker.post.caption|summary) or "Ohne Text" }}</p>
+    <p class="meta">{{ picker.post.posted_at|when(now) }}</p>
+  </div>
+</article>
+
+<section class="details">
+  <p class="eyebrow">Vorschläge</p>
+  {% for le in picker.suggestions %}
+  <article class="row">
+    <div class="row-body">
+      <p class="body tags">
+        {% for sc in le.sub_calendars %}<span class="dot" style="background:{{ sc.color }}"></span>{% endfor %}{{ le.event.title or "Ohne Titel" }}
+      </p>
+      <p class="meta">{{ le.event.starts_at|day(now) }} · {{ le.event|event_time }}</p>
+      <p class="meta">{{ le.reasons|map("reason_label")|join(" · ") }}</p>
+      {% if le.linked %}
+      <p class="meta">Verknüpft ✓</p>
+      {% else %}
+      <form method="post" action="/calendar/link">
+        <input type="hidden" name="post_id" value="{{ picker.post.id }}">
+        <input type="hidden" name="event_id" value="{{ le.event.id }}">
+        <input type="hidden" name="next" value="/posts/{{ picker.post.id }}">
+        <button type="submit" class="btn btn-solid">Verknüpfen</button>
+      </form>
+      {% endif %}
+    </div>
+  </article>
+  {% else %}
+  <p class="meta">Keine Vorschläge gefunden.</p>
+  {% endfor %}
+</section>
+
+<section class="details">
+  <p class="eyebrow">Termine der nächsten 60 Tage</p>
+  {% for le in picker.events %}
+  <article class="row">
+    <div class="row-body">
+      <p class="body tags">
+        {% for sc in le.sub_calendars %}<span class="dot" style="background:{{ sc.color }}"></span>{% endfor %}{{ le.event.title or "Ohne Titel" }}
+      </p>
+      <p class="meta">{{ le.event.starts_at|day(now) }} · {{ le.event|event_time }}</p>
+      {% if le.linked %}
+      <p class="meta">Verknüpft ✓</p>
+      {% else %}
+      <form method="post" action="/calendar/link">
+        <input type="hidden" name="post_id" value="{{ picker.post.id }}">
+        <input type="hidden" name="event_id" value="{{ le.event.id }}">
+        <input type="hidden" name="next" value="/posts/{{ picker.post.id }}">
+        <button type="submit" class="btn">Verknüpfen</button>
+      </form>
+      {% endif %}
+    </div>
+  </article>
+  {% else %}
+  <p class="meta">Keine Termine in diesem Zeitraum.</p>
+  {% endfor %}
+</section>
+{% endblock %}

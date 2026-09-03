@@ -61,15 +61,22 @@ async def calendar_page(
     from_: Annotated[str | None, Query(alias="from")] = None,
     month: str | None = None,
     cal: Annotated[list[int], Query()] = [],  # noqa: B006 - FastAPI re-resolves this per request
+    status: str = "all",
 ):
     now = datetime.now(UTC)
     selected = set(cal)
     cal_qs = "".join(f"&cal={c}" for c in cal)
+    if status not in {"linked", "unlinked"}:
+        status = "all"
+    status_qs = "" if status == "all" else f"&status={status}"
     context: dict[str, object] = {
         "selected": selected,
         "cal_qs": cal_qs,
         "now": now,
         "last_run": services.sync_job.last_run,
+        "status": status,
+        "status_qs": status_qs,
+        "status_pills": display.STATUS_PILLS,
     }
 
     if view == "month":
@@ -77,6 +84,7 @@ async def calendar_page(
         year, month_num = display.parse_month(month) or current
         start_day, end_day = display.month_range(year, month_num)
         page = await services.calendar.run(start_day, end_day, sub_calendar_ids=cal)
+        page.events = display.filter_by_status(page.events, status)
         context |= {
             "page": page,
             "view": "month",
@@ -87,6 +95,7 @@ async def calendar_page(
         from_day = display.parse_day(from_) or today(services.tz)
         end_day = from_day + timedelta(days=27)
         page = await services.calendar.run(from_day, end_day, sub_calendar_ids=cal)
+        page.events = display.filter_by_status(page.events, status)
         context |= {
             "page": page,
             "view": "agenda",
@@ -102,6 +111,33 @@ async def sync_now(services: ServicesDep):
     # Same job the scheduler runs, so a manual sync also surfaces a stale run.
     await services.sync_job.run()
     return RedirectResponse("/calendar", status_code=303)
+
+
+# Registered before /events/{event_id} so "link" is never swallowed as an event id.
+@router.get("/link")
+async def link_picker(request: Request, services: ServicesDep, post: str = Query(...)):
+    picker = await services.link_picker.run(post, datetime.now(UTC))
+    if picker is None:
+        raise HTTPException(status_code=404, detail="unknown post")
+    return services.templates.TemplateResponse(
+        request, "link.html", {"picker": picker, "now": datetime.now(UTC)}
+    )
+
+
+@router.post("/link")
+async def link_from_post(
+    services: ServicesDep,
+    post_id: str = Form(...),
+    event_id: str = Form(...),
+    next: str = Form(""),
+):
+    try:
+        await services.link_post.add(event_id, post_id)
+    except (UnknownEventError, UnknownPostError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    # Only ever bounce back to one of our own pages.
+    target = next if next.startswith("/") and not next.startswith("//") else f"/posts/{post_id}"
+    return RedirectResponse(target, status_code=303)
 
 
 @router.get("/events/{event_id}")

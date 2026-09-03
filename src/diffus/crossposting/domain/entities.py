@@ -128,6 +128,22 @@ class Delivery:
 
 
 @dataclass(frozen=True, slots=True)
+class LinkedEvent:
+    """The connector's own view of a calendar event, via EventDirectory.
+
+    Mirrors calendar.domain.entities.LinkablePost the other way round: a
+    context never imports another context's domain, so each side has its
+    own tiny read model of the other's entity.
+    """
+
+    id: str
+    title: str
+    starts_at: datetime
+    detail_url: str
+    removed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class AccessToken:
     """A bearer secret. Never shows its text in reprs, logs or f-strings; use .value on the wire."""
 

@@ -10,10 +10,14 @@ from zoneinfo import ZoneInfo
 from fastapi.templating import Jinja2Templates
 
 from diffus.shared.presentation import display
+from diffus.shared.presentation.assets import Assets, load_assets
 
 
 def build_templates(
-    tz: ZoneInfo, directories: Sequence[Path], globals: Mapping[str, object] = {}
+    tz: ZoneInfo,
+    directories: Sequence[Path],
+    globals: Mapping[str, object] = {},
+    assets: Assets | None = None,
 ) -> Jinja2Templates:
     """Jinja2Templates over `directories` (context templates first, shared last) with the
     shared filters installed."""
@@ -26,5 +30,6 @@ def build_templates(
     # Environment.globals' inferred value type is narrower than `object` (it's seeded
     # from jinja2's untyped DEFAULT_NAMESPACE); widen it so arbitrary globals fit.
     env_globals = cast("MutableMapping[str, object]", templates.env.globals)
+    env_globals["assets"] = assets if assets is not None else load_assets()
     env_globals.update(globals)
     return templates

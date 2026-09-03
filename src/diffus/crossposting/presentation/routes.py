@@ -39,8 +39,11 @@ def build_templates(tz: ZoneInfo, calendar_enabled: bool = False) -> Jinja2Templ
 
 
 @router.get("/")
-async def index(request: Request, services: ServicesDep):
+async def index(request: Request, services: ServicesDep, events: str = "all"):
     overview = await services.overview.run()
+    if events not in {"with", "without"}:
+        events = "all"
+    overview.posts = display.filter_by_events(overview.posts, events)
     return services.templates.TemplateResponse(
         request,
         "index.html",
@@ -49,6 +52,8 @@ async def index(request: Request, services: ServicesDep):
             "now": datetime.now(UTC),
             "last_run": services.sync_job.last_run,
             "multi_target": len(services.destinations) > 1,
+            "events": events,
+            "event_pills": display.EVENT_PILLS,
         },
     )
 

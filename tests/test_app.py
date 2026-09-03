@@ -15,6 +15,7 @@ from diffus.app import create_app, lifespan
 from diffus.calendar.application.calendar_events import GetCalendarEvents
 from diffus.calendar.application.event_detail import GetEventDetail
 from diffus.calendar.application.link_event_post import LinkEventPost
+from diffus.calendar.application.link_picker import GetLinkPicker
 from diffus.calendar.application.sync_calendar import SyncCalendar
 from diffus.calendar.application.sync_job import CalendarSyncJob
 from diffus.calendar.domain.entities import CalendarEvent, CalendarSnapshot, LinkablePost
@@ -22,19 +23,34 @@ from diffus.calendar.presentation.routes import build_templates as build_calenda
 from diffus.calendar.presentation.services import CalendarServices
 from diffus.crossposting.application.connect_instagram import ConnectInstagram
 from diffus.crossposting.application.deliver import DeliverPost
-from diffus.crossposting.application.overview import GetOverview
+from diffus.crossposting.application.overview import GetOverview, NoEvents
 from diffus.crossposting.application.post_detail import GetPostDetail
 from diffus.crossposting.application.preview import GetPreview
 from diffus.crossposting.application.refresh_token import EnsureFreshToken
 from diffus.crossposting.application.resend_delivery import ResendDelivery
 from diffus.crossposting.application.sync_job import SyncJob
 from diffus.crossposting.application.sync_posts import SyncPosts
-from diffus.crossposting.domain.entities import Destination, MediaItem, MediaType, Post, Preview
+from diffus.crossposting.domain.entities import (
+    Destination,
+    LinkedEvent,
+    MediaItem,
+    MediaType,
+    Post,
+    Preview,
+)
+from diffus.crossposting.domain.ports import EventDirectory
 from diffus.crossposting.presentation.routes import build_templates
 from diffus.crossposting.presentation.services import Services
 from diffus.shared.config import get_settings
 from tests.calendar.fakes import FakeCalendar, FakeCalendarUnitOfWork, FakeEvents, FakePostCatalog
-from tests.crossposting.fakes import FakeAuth, FakeMedia, FakeSink, FakeUnitOfWork, StaticSource
+from tests.crossposting.fakes import (
+    FakeAuth,
+    FakeEventDirectory,
+    FakeMedia,
+    FakeSink,
+    FakeUnitOfWork,
+    StaticSource,
+)
 
 
 @pytest.fixture
@@ -48,6 +64,10 @@ def settings_env(monkeypatch):
     monkeypatch.setenv("BASIC_AUTH_USERNAME", "u")
     monkeypatch.setenv("BASIC_AUTH_PASSWORD", "p")
     monkeypatch.setenv("DISPLAY_TIMEZONE", "Europe/Berlin")
+    # Explicitly off: a dev checkout's own .env (not read in CI, but pydantic-settings
+    # falls back to it locally) may carry a real token, which would silently flip
+    # calendar_enabled for every test that doesn't ask for it.
+    monkeypatch.setenv("KALENDER_DIGITAL_TOKEN", "")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
@@ -101,7 +121,13 @@ async def make_uow() -> FakeUnitOfWork:
     return uow
 
 
-def make_services(uow: FakeUnitOfWork, sink: FakeSink, media: FakeMedia) -> Services:
+def make_services(
+    uow: FakeUnitOfWork,
+    sink: FakeSink,
+    media: FakeMedia,
+    events: EventDirectory | None = None,
+) -> Services:
+    events = events if events is not None else NoEvents()
     auth = FakeAuth()
     destinations = [Destination("telegram", "c1"), Destination("telegram", "c2")]
     deliver = DeliverPost(media=media, sinks={"telegram": sink}, uow=uow)
@@ -113,8 +139,8 @@ def make_services(uow: FakeUnitOfWork, sink: FakeSink, media: FakeMedia) -> Serv
         sync_job=job,
         connect=ConnectInstagram(auth=auth, uow=uow),
         resend=ResendDelivery(uow=uow, deliver=deliver),
-        overview=GetOverview(uow=uow, source="instagram"),
-        detail=GetPostDetail(uow=uow),
+        overview=GetOverview(uow=uow, source="instagram", events=events),
+        detail=GetPostDetail(uow=uow, events=events),
         preview=GetPreview(uow=uow),
         destinations=destinations,
         templates=build_templates(ZoneInfo("Europe/Berlin")),
@@ -158,6 +184,7 @@ def make_calendar_services(
         calendar=GetCalendarEvents(uow=uow, posts=catalog, tz=tz),
         event_detail=GetEventDetail(uow=uow, posts=catalog, tz=tz),
         link_post=LinkEventPost(uow=uow, posts=catalog),
+        link_picker=GetLinkPicker(uow=uow, posts=catalog, tz=tz),
         tz=tz,
         templates=build_calendar_templates(tz, calendar_enabled=True),
     )
@@ -197,6 +224,85 @@ async def test_calendar_pages_and_linking_work_on_fakes(settings_env):
 
         resp = await client.post("/calendar/sync")
         assert resp.status_code == 303
+
+
+async def test_calendar_status_filter_hides_a_linked_event_and_the_pager_carries_it(settings_env):
+    uow, catalog = make_calendar_uow()
+    calendar_services = make_calendar_services(uow, catalog)
+    services = make_services(await make_uow(), FakeSink(), FakeMedia())
+    app = create_app(services=services, calendar=calendar_services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        await client.post("/calendar/events/e1/link", data={"post_id": "p1"})
+
+        resp = await client.get("/calendar?status=unlinked")
+        assert "Widersetzen Plenum" not in resp.text
+        assert "status=unlinked" in resp.text
+
+        resp = await client.get("/calendar?status=linked")
+        assert "Widersetzen Plenum" in resp.text
+
+
+async def test_index_events_filter_shows_only_posts_with_a_linked_event(settings_env):
+    event = LinkedEvent(
+        id="e1",
+        title="Widersetzen Plenum",
+        starts_at=datetime(2026, 9, 3, 16, 0, tzinfo=UTC),
+        detail_url="/calendar/events/e1",
+    )
+    events = FakeEventDirectory({"p1": [event]})
+    services = make_services(await make_uow(), FakeSink(), FakeMedia(), events=events)
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.get("/?events=with")
+        assert "Hello" in resp.text
+        assert "Widersetzen Plenum" in resp.text
+
+        resp = await client.get("/?events=without")
+        assert "Hello" not in resp.text
+
+
+async def test_link_from_the_post_side_stores_the_link_and_bounces_back(settings_env):
+    uow, catalog = make_calendar_uow()
+    calendar_services = make_calendar_services(uow, catalog)
+    services = make_services(await make_uow(), FakeSink(), FakeMedia())
+    app = create_app(services=services, calendar=calendar_services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.get("/calendar/link?post=p1")
+        assert resp.status_code == 200
+        assert "Widersetzen Plenum" in resp.text
+
+        resp = await client.post(
+            "/calendar/link", data={"post_id": "p1", "event_id": "e1", "next": "/posts/p1"}
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/posts/p1"
+
+        resp = await client.get("/calendar/events/e1")
+        assert "/posts/p1" in resp.text
+
+        resp = await client.get("/calendar/link?post=nope")
+        assert resp.status_code == 404
+
+
+async def test_static_files_are_served_without_auth(settings_env):
+    services = make_services(await make_uow(), FakeSink(), FakeMedia())
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/static/dist/nope.js")
+
+    assert resp.status_code == 404
 
 
 async def test_calendar_routes_404_and_the_nav_hides_the_link_when_the_calendar_is_disabled(

@@ -41,13 +41,21 @@
   </div>
 {% endif %}
 
+{% if calendar_enabled %}
+<p class="pills">
+  {% for value, label in event_pills %}
+  {% if value == events %}<span class="pill current">{{ label }}</span>{% else %}<a class="pill" href="/?events={{ value }}">{{ label }}</a>{% endif %}
+  {% endfor %}
+</p>
+{% endif %}
+
 <section class="feed">
 {% for view in ov.posts %}
   {% set post = view.post %}
   {% set deliveries = view.deliveries|sort(attribute="destination") %}
   {% set cover = view|stored_cover %}
   <article class="row">
-    <a class="thumb" href="/posts/{{ post.id }}">
+    <a class="thumb" href="/posts/{{ post.id }}" data-modal>
       {% if cover is not none %}
       <img src="/posts/{{ post.id }}/media/{{ cover }}" alt="" loading="lazy">
       {% elif post.cover_url %}
@@ -58,7 +66,7 @@
     </a>
     <div class="row-body">
       {% set caption = post.caption|summary %}
-      <p class="body"><a class="plain" href="/posts/{{ post.id }}">{% if caption %}{{ caption }}{% else %}<span class="muted">Ohne Text</span>{% endif %}</a></p>
+      <p class="body"><a class="plain" href="/posts/{{ post.id }}" data-modal>{% if caption %}{{ caption }}{% else %}<span class="muted">Ohne Text</span>{% endif %}</a></p>
 
       {% if deliveries|length == 1 %}
         {% set d = deliveries[0] %}
@@ -73,6 +81,8 @@
         </div>
         {% endif %}
       {% endif %}
+
+      {% for e in view.events %}<p class="meta">→ <a class="plain" href="{{ e.detail_url }}" data-modal>{{ e.title or "Ohne Titel" }}, {{ e.starts_at|day(now) }}</a>{% if e.removed %} (gelöscht){% endif %}</p>{% endfor %}
 
       {% for d in deliveries if d.status.value != "sent" %}
       <div class="fix">
@@ -91,5 +101,5 @@
 {% endfor %}
 </section>
 
-<p class="meta foot">Nur die letzten 20 Posts. Was vor der Verbindung gepostet wurde, wird übersprungen.</p>
+<p class="meta foot">Nur die letzten 20 Posts. Was vor der Verbindung gepostet wurde, wird übersprungen.{% if calendar_enabled %} Der Termin-Filter wirkt nur auf diese 20 Posts.{% endif %}</p>
 {% endblock %}

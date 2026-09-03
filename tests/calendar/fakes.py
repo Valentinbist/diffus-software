@@ -119,6 +119,9 @@ class FakeEvents:
         matches.sort(key=lambda e: (e.starts_at, e.id))
         return [dataclasses.replace(e) for e in matches]
 
+    async def get_many(self, ids: Sequence[str]) -> dict[str, CalendarEvent]:
+        return {i: dataclasses.replace(self._rows[i]) for i in ids if i in self._rows}
+
 
 class FakeEventLinks:
     def __init__(self) -> None:
@@ -142,6 +145,13 @@ class FakeEventLinks:
         for (event_id, _post_id), link in self._rows.items():
             if event_id in event_ids:
                 grouped.setdefault(event_id, []).append(dataclasses.replace(link))
+        return grouped
+
+    async def for_posts(self, post_ids: Sequence[str]) -> dict[str, list[EventLink]]:
+        grouped: dict[str, list[EventLink]] = {}
+        for (_event_id, post_id), link in self._rows.items():
+            if post_id in post_ids:
+                grouped.setdefault(post_id, []).append(dataclasses.replace(link))
         return grouped
 
 
