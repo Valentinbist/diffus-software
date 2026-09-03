@@ -2,9 +2,10 @@
 
 Polls one Instagram Business account and fans out new posts to N Telegram chats.
 Single Python process (FastAPI + APScheduler), Postgres for state, HTTP Basic
-auth on every route. No Signal support in v1 — see
-[`docs/architecture-proposals.md`](docs/architecture-proposals.md) for the
-full design and decisions.
+auth on every route. Instagram → Telegram is the only pairing wired today; the
+model is source/sink agnostic — see [`docs/architecture.md`](docs/architecture.md)
+for the design, decisions and how to add a sink, a source, or a new bounded
+context.
 
 ## Quickstart
 
@@ -41,10 +42,10 @@ uv run ty check
 ## Layers
 
 ```text
-domain          entities + ports (protocols); stdlib only, no framework deps
-application     use cases (sync, connect, refresh, resend, overview); depends only on domain
-infrastructure  Postgres (SQLAlchemy async), Instagram Graph client, Telegram bot client, media downloader
-presentation    FastAPI app, routes, HTTP Basic auth, Jinja templates — the composition root
+domain          entities, value objects (Destination, AccessToken), ports incl. UnitOfWork; stdlib only
+application     use cases (sync, deliver, sync job, connect, refresh, resend, overview); depend only on domain
+infrastructure  Postgres (SQLAlchemy async, SqlUnitOfWork), Instagram Graph client, Telegram sink, media downloader
+presentation    FastAPI app, typed Services, routes, HTTP Basic auth, Jinja templates — the composition root
 ```
 
 ## Deployment

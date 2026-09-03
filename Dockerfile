@@ -13,5 +13,5 @@ COPY alembic ./alembic
 RUN uv sync --frozen --no-dev
 
 # --workers 1 is load-bearing: the Instagram poller runs inside this process
-# (FastAPI lifespan task). More workers = racing pollers. See docs/architecture-proposals.md.
+# (FastAPI lifespan task). More workers = racing pollers. See docs/architecture.md.
 CMD ["sh", "-c", "uv run --no-dev alembic upgrade head && uv run --no-dev uvicorn connector.presentation.app:app --host 0.0.0.0 --port 8000 --workers 1"]
