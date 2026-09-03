@@ -123,6 +123,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "python-multipart" },
     { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "tzdata" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -145,6 +146,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.4" },
     { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
+    { name = "tzdata", specifier = ">=2025.2" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 

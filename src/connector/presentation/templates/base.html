@@ -1,60 +1,171 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="de">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Instagram → Telegram{% endblock %}</title>
+  <title>{% block title %}Crossposting{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:ital,wght@0,400;0,500;1,400&family=Playfair+Display:ital,wght@0,400;0,700;1,400&display=swap">
   <style>
-    :root { color-scheme: light dark; }
+    /* Tokens lifted from the diffus.space design system (tokens/*.css).
+       Two colours, one grey, no cards, no shadows, pills are the only curve. */
+    :root {
+      --diffus-black: #020202;
+      --diffus-white: #ffffff;
+      --diffus-grey-30: #4C4C4C;
+      --diffus-grey-95: #F2F2F2;
+
+      --surface-page: var(--diffus-black);
+      --text-body: var(--diffus-white);
+      --text-muted: var(--diffus-grey-30);
+      --text-invert: var(--diffus-black);
+      --border-default: rgba(255, 255, 255, 0.28);
+      --border-subtle: rgba(255, 255, 255, 0.12);
+
+      --font-display: 'Playfair Display', Georgia, Times, serif;
+      --font-body: 'Fira Sans', Helvetica, Arial, sans-serif;
+      --font-size-xs: 14px;
+      --font-size-sm: 16px;
+      --font-size-xl: 28px;
+      --line-height-body: 1.7;
+      --line-height-heading: 1.3;
+
+      --space-horizontal: 25px;
+      --width-default: 620px;
+      --radius-button: 9999px;
+      --border-width-button: 2px;
+    }
+
+    html { color-scheme: dark; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-      max-width: 960px;
-      margin: 2rem auto;
-      padding: 0 1rem;
-      line-height: 1.5;
+      margin: 0;
+      background: var(--surface-page);
+      color: var(--text-body);
+      font-family: var(--font-body);
+      font-size: var(--font-size-sm);
+      line-height: var(--line-height-body);
+      -webkit-font-smoothing: antialiased;
     }
-    h1 { font-size: 1.4rem; margin-bottom: 1.25rem; }
-    .card {
-      border: 1px solid rgba(128, 128, 128, 0.35);
-      border-radius: 8px;
-      padding: 1rem 1.25rem;
-      margin-bottom: 1.5rem;
+    main {
+      box-sizing: border-box;
+      max-width: var(--width-default);
+      margin: 0 auto;
+      padding: 52px var(--space-horizontal) 40px;
     }
-    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
-    th, td {
-      text-align: left;
-      padding: 0.5rem;
-      border-bottom: 1px solid rgba(128, 128, 128, 0.25);
-      vertical-align: top;
+    form { margin: 0; }
+    a {
+      color: var(--text-body);
+      text-decoration: underline;
+      text-underline-offset: 0.18em;
+      transition: color 120ms linear;
     }
-    .badge {
+    a:hover, a:focus { color: var(--text-muted); }
+    /* Row and back links: no underline, like the design system's list-title links */
+    .plain { text-decoration: none; }
+
+    /* Type roles, as the mockups name them */
+    .h1 {
+      margin: 0;
+      font: 400 var(--font-size-xl) / var(--line-height-heading) var(--font-display);
+    }
+    .body { margin: 0; font-size: var(--font-size-sm); color: var(--text-body); }
+    .meta { margin: 0; font-size: var(--font-size-xs); color: var(--text-muted); }
+    .muted { color: var(--text-muted); }
+    /* The mockups pull a line to white when it wants attention. No colour. */
+    .attention { color: var(--text-body); }
+
+    .kicker { margin-bottom: 6px; }
+    .status { margin-top: 14px; }
+
+    /* Button component: outline pill, hover goes grey, solid variant is white */
+    .btn {
       display: inline-block;
-      padding: 0.15rem 0.5rem;
-      border-radius: 999px;
-      font-size: 0.75rem;
-      margin: 0.15rem 0.15rem 0.15rem 0;
-    }
-    .badge-sent { background: rgba(22, 163, 74, 0.18); color: #16a34a; }
-    .badge-failed { background: rgba(220, 38, 38, 0.18); color: #dc2626; }
-    .badge-pending { background: rgba(234, 179, 8, 0.18); color: #a16207; }
-    .badge-skipped { background: rgba(107, 114, 128, 0.18); color: #6b7280; }
-    button {
+      box-sizing: border-box;
+      font: 400 var(--font-size-sm) / 1 var(--font-body);
+      padding: 0.667em 1.333em;
+      text-align: center;
+      text-decoration: none;
       cursor: pointer;
-      border: 1px solid rgba(128, 128, 128, 0.4);
-      border-radius: 6px;
-      padding: 0.3rem 0.75rem;
-      background: transparent;
-      font: inherit;
       color: inherit;
+      background: transparent;
+      border: var(--border-width-button) solid currentColor;
+      border-radius: var(--radius-button);
+      transition: color 120ms linear, background-color 120ms linear, border-color 120ms linear;
     }
-    form.inline { display: inline-block; margin: 0.15rem 0; }
-    .muted { color: #888; }
-    a { color: inherit; }
-    .delivery-row { display: flex; align-items: center; flex-wrap: wrap; gap: 0.25rem; }
+    .btn:hover, .btn:focus { color: var(--text-muted); }
+    .btn-solid {
+      color: var(--text-invert);
+      background: var(--diffus-white);
+      border-color: var(--diffus-white);
+    }
+    .btn-solid:hover, .btn-solid:focus {
+      color: var(--text-invert);
+      background: var(--diffus-grey-95);
+      border-color: var(--diffus-grey-95);
+    }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+
+    /* Notice: a 28% hairline box, the only "container" in the system */
+    .notice { margin-top: 22px; padding: 18px; border: 1px solid var(--border-default); }
+    .notice .actions { margin-top: 16px; }
+
+    /* Feed rows: poster + text, separated by 12% hairlines */
+    .feed { margin-top: 28px; }
+    .row {
+      display: flex;
+      gap: 14px;
+      align-items: flex-start;
+      padding: 18px 0;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .row:last-child { border-bottom: none; }
+    .thumb { flex: none; display: block; width: 64px; height: 64px; text-decoration: none; }
+    .thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+    .ph {
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+      border: 1px solid var(--border-default);
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .row-body { flex: 1; min-width: 0; }
+    .row-body .meta { margin-top: 4px; }
+    .targets { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 4px; }
+    .targets .meta { margin-top: 0; }
+    .fix { margin-top: 10px; }
+    .fix form { margin-top: 8px; }
+    .foot { margin-top: 24px; }
+
+    /* Detail page: media in the flow, square and unadorned; caption as posted */
+    .gallery {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      margin-top: 22px;
+    }
+    .gallery.single { grid-template-columns: 1fr; }
+    .media { margin: 0; min-width: 0; }
+    .media img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; }
+    .gallery.single .media img { aspect-ratio: auto; height: auto; }
+    .media .ph { width: 100%; height: auto; aspect-ratio: 1; }
+    .media figcaption { margin-top: 4px; }
+    .caption { margin-top: 18px; white-space: pre-line; overflow-wrap: anywhere; }
+    .details { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border-subtle); }
+    .eyebrow { margin: 0 0 4px; font-size: var(--font-size-xs); font-weight: 500; }
+    .delivery { padding: 12px 0; border-bottom: 1px solid var(--border-subtle); }
+    .delivery:last-child { border-bottom: none; }
+    .delivery .meta { margin-top: 2px; }
+    .delivery form { margin-top: 10px; }
   </style>
 </head>
 <body>
-  <h1>Instagram → Telegram</h1>
-  {% block content %}{% endblock %}
+  <main>
+    {% block content %}{% endblock %}
+  </main>
 </body>
 </html>

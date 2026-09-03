@@ -16,9 +16,12 @@ full design and decisions.
      `TELEGRAM_BOT_TOKEN`, add the bot to the target chats, and set
      `TELEGRAM_CHAT_IDS` (comma-separated).
    - Set `BASIC_AUTH_USERNAME` / `BASIC_AUTH_PASSWORD` for the UI.
+   - Optionally set `DISPLAY_TIMEZONE` (default `Europe/Berlin`) for the times
+     the UI shows. Storage stays UTC.
 2. `docker compose up --build`
-3. Open `http://localhost:8000` (behind Basic auth) and click **Connect
-   Instagram** to complete the OAuth flow.
+3. Open `http://localhost:8000` (behind Basic auth) and click **Instagram
+   verbinden** to complete the OAuth flow. The UI is in German, like the
+   diffus.space site it belongs to.
 
 The first sync after connecting only marks existing posts as seen — it never
 blasts your entire history into Telegram. New posts found on later polls are
@@ -108,6 +111,10 @@ the next deploy silently reverts you.
 - **Postgres is never published to the host interface** — it is reachable only
   over the compose network. This matters because Docker's iptables rules bypass
   ufw, so a published port would be exposed regardless of the firewall.
+- **Post images live in Postgres.** Instagram's CDN links expire, so each sync
+  stores a copy of every still image in the `previews` table while the link is
+  fresh, and the UI serves them from `/posts/<id>/media/<n>`. A few hundred KB
+  per image; it grows with the number of posts, not with time.
 - **Backups** are a nightly `pg_dump` to `/opt/connector/backups`, kept 14 days.
   That covers a bad migration, not a lost server; ship them off-box if the data
   matters to you.

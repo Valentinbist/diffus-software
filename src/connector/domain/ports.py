@@ -11,7 +11,7 @@ from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import Protocol
 
-from connector.domain.entities import Delivery, DeliveryStatus, Post, Token
+from connector.domain.entities import Delivery, DeliveryStatus, Post, Preview, Token
 
 
 class PostSource(Protocol):
@@ -26,6 +26,10 @@ class PostSink(Protocol):
 
 class MediaGateway(Protocol):
     def fetch(self, post: Post) -> AbstractAsyncContextManager[list[Path]]: ...
+
+    async def download_image(self, url: str) -> tuple[str, bytes] | None:
+        """(content type, bytes) of an image, or None if the URL isn't a reasonably sized image."""
+        ...
 
 
 class AuthGateway(Protocol):
@@ -60,6 +64,16 @@ class DeliveryRepository(Protocol):
     ) -> None: ...
 
     async def for_posts(self, post_ids: Sequence[str]) -> dict[str, list[Delivery]]: ...
+
+
+class PreviewRepository(Protocol):
+    async def save(self, preview: Preview) -> None: ...
+
+    async def get(self, post_id: str, index: int) -> Preview | None: ...
+
+    async def stored(self, post_ids: Sequence[str]) -> dict[str, frozenset[int]]:
+        """Which media indexes of each post already have a stored preview."""
+        ...
 
 
 class TokenRepository(Protocol):

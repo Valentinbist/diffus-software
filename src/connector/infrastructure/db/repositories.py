@@ -13,8 +13,16 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from connector.domain.entities import Delivery, DeliveryStatus, MediaItem, MediaType, Post, Token
-from connector.infrastructure.db.models import DeliveryRow, PostRow, TokenRow
+from connector.domain.entities import (
+    Delivery,
+    DeliveryStatus,
+    MediaItem,
+    MediaType,
+    Post,
+    Preview,
+    Token,
+)
+from connector.infrastructure.db.models import DeliveryRow, PostRow, PreviewRow, TokenRow
 
 MAX_ERROR_LENGTH = 2000
 
@@ -24,7 +32,10 @@ def _post_to_row(post: Post) -> dict:
         "id": post.id,
         "caption": post.caption,
         "permalink": post.permalink,
-        "media": [{"url": m.url, "type": m.type.value} for m in post.media],
+        "media": [
+            {"url": m.url, "type": m.type.value, "thumbnail_url": m.thumbnail_url}
+            for m in post.media
+        ],
         "posted_at": post.posted_at,
     }
 
@@ -35,7 +46,11 @@ def _row_to_post(row: PostRow) -> Post:
         caption=row.caption,
         permalink=row.permalink,
         media=tuple(
-            MediaItem(url=m["url"], type=MediaType(m["type"])) for m in row.media
+            # .get(): rows written before thumbnails were stored have no such key.
+            MediaItem(
+                url=m["url"], type=MediaType(m["type"]), thumbnail_url=m.get("thumbnail_url")
+            )
+            for m in row.media
         ),
         posted_at=row.posted_at,
     )
@@ -151,6 +166,55 @@ class SqlDeliveryRepository:
             for row in result.scalars().all():
                 grouped.setdefault(row.post_id, []).append(_row_to_delivery(row))
             return grouped
+
+
+class SqlPreviewRepository:
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._sf = session_factory
+
+    async def save(self, preview: Preview) -> None:
+        async with self._sf() as s, s.begin():
+            stmt = pg_insert(PreviewRow).values(
+                post_id=preview.post_id,
+                media_index=preview.index,
+                content_type=preview.content_type,
+                data=preview.data,
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[PreviewRow.post_id, PreviewRow.media_index],
+                set_={
+                    "content_type": stmt.excluded.content_type,
+                    "data": stmt.excluded.data,
+                    "fetched_at": func.now(),
+                },
+            )
+            await s.execute(stmt)
+
+    async def get(self, post_id: str, index: int) -> Preview | None:
+        async with self._sf() as s:
+            row = await s.get(PreviewRow, (post_id, index))
+            if row is None:
+                return None
+            return Preview(
+                post_id=row.post_id,
+                index=row.media_index,
+                content_type=row.content_type,
+                data=row.data,
+            )
+
+    async def stored(self, post_ids: Sequence[str]) -> dict[str, frozenset[int]]:
+        if not post_ids:
+            return {}
+        async with self._sf() as s:
+            result = await s.execute(
+                select(PreviewRow.post_id, PreviewRow.media_index).where(
+                    PreviewRow.post_id.in_(post_ids)
+                )
+            )
+            grouped: dict[str, set[int]] = {}
+            for post_id, index in result.all():
+                grouped.setdefault(post_id, set()).add(index)
+            return {post_id: frozenset(indexes) for post_id, indexes in grouped.items()}
 
 
 class SqlTokenRepository:

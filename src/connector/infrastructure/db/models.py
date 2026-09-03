@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Integer, LargeBinary, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -31,6 +31,22 @@ class PostRow(Base):
     permalink: Mapped[str] = mapped_column(Text, nullable=False)
     media: Mapped[list[dict]] = mapped_column(JSONB, nullable=False)
     posted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class PreviewRow(Base):
+    """A stored still image per media item. Mirrors alembic/versions/0002_previews.py."""
+
+    __tablename__ = "previews"
+
+    post_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("posts.id"), primary_key=True
+    )
+    media_index: Mapped[int] = mapped_column(Integer, primary_key=True)
+    content_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     fetched_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

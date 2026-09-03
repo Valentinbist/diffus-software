@@ -125,11 +125,14 @@ class InstagramClient:
             media_items: list[MediaItem] = []
             for child in raw_children:
                 url = child.get("media_url")
+                thumbnail = child.get("thumbnail_url")
                 if url and child.get("media_type") == "VIDEO":
-                    media_items.append(MediaItem(url=url, type=MediaType.VIDEO))
+                    media_items.append(
+                        MediaItem(url=url, type=MediaType.VIDEO, thumbnail_url=thumbnail)
+                    )
                     continue
                 if not url:
-                    url = child.get("thumbnail_url")
+                    url = thumbnail
                 if not url:
                     continue
                 media_items.append(MediaItem(url=url, type=MediaType.IMAGE))

@@ -59,6 +59,18 @@ def test_parse_carousel_album_expands_children_and_skips_unusable_media():
     assert carousel.media[1].url == "https://cdn.example.com/2.mp4"
 
 
+def test_parse_keeps_video_thumbnail_and_exposes_previews():
+    posts = InstagramClient._parse(CAROUSEL_PAYLOAD)
+
+    carousel = next(p for p in posts if p.id == "123")
+    image, video = carousel.media
+    assert image.thumbnail_url is None
+    assert image.preview_url == "https://cdn.example.com/1.jpg"
+    assert video.thumbnail_url == "https://cdn.example.com/2-thumb.jpg"
+    assert video.preview_url == "https://cdn.example.com/2-thumb.jpg"
+    assert carousel.cover_url == "https://cdn.example.com/1.jpg"
+
+
 def test_parse_single_media_post():
     posts = InstagramClient._parse(CAROUSEL_PAYLOAD)
 

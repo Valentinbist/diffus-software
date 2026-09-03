@@ -18,6 +18,7 @@ dependencies = [
     "httpx>=0.28",
     "pydantic-settings>=2.4",
     "apscheduler>=3.11,<4",
+    "tzdata>=2025.2",
 ]
 
 [dependency-groups]

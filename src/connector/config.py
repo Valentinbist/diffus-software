@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     poll_interval_minutes: int = 5
     basic_auth_username: str
     basic_auth_password: str
+    # IANA zone for the times the UI shows; storage stays UTC.
+    display_timezone: str = "Europe/Berlin"
 
     @property
     def chat_ids(self) -> list[str]:

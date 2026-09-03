@@ -19,6 +19,7 @@ from tests.fakes import (
     FakeDeliveries,
     FakeMedia,
     FakePosts,
+    FakePreviews,
     FakeSink,
     FakeTokens,
     StaticSource,
@@ -56,6 +57,7 @@ def make_job(source=None, sink=None, tokens=None, auth=None):
         posts=FakePosts(),
         deliveries=FakeDeliveries(),
         media=FakeMedia(),
+        previews=FakePreviews(),
         sink=sink,
         chat_ids=["chat1"],
     )
@@ -122,3 +124,49 @@ async def test_run_swallows_not_connected():
     job, _tokens, _auth = make_job(source=FailingSource(NotConnectedError("no token")))
 
     await job.run()  # must not raise
+
+
+# -- last_run: what the UI's status line is built from ----------------------
+
+
+async def test_run_records_when_it_finished_cleanly():
+    job, _tokens, _auth = make_job(tokens=FakeTokens(make_token(age_days=1)))
+
+    await job.run()
+
+    assert job.last_run is not None
+    assert job.last_run.sync_error is None
+    assert job.last_run.refresh_error is None
+    assert job.last_run.at > datetime.now(UTC) - timedelta(minutes=1)
+
+
+async def test_failed_sync_is_recorded_for_the_ui():
+    job, _tokens, _auth = make_job(
+        source=FailingSource(RuntimeError("instagram is down")),
+        tokens=FakeTokens(make_token(age_days=1)),
+    )
+
+    await job.run()
+
+    assert job.last_run is not None
+    assert job.last_run.sync_error == "instagram is down"
+
+
+async def test_failed_refresh_is_recorded_for_the_ui():
+    job, _tokens, _auth = make_job(
+        tokens=FakeTokens(make_token(age_days=55)), auth=FakeAuth(fail=True)
+    )
+
+    await job.run()
+
+    assert job.last_run is not None
+    assert job.last_run.refresh_error == "simulated refresh failure"
+    assert job.last_run.sync_error is None
+
+
+async def test_not_connected_does_not_count_as_a_run():
+    job, _tokens, _auth = make_job(source=FailingSource(NotConnectedError("no token")))
+
+    await job.run()
+
+    assert job.last_run is None

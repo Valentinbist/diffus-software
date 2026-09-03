@@ -1,4 +1,4 @@
-"""Downloads Instagram CDN media to a local tempdir. Implements MediaGateway."""
+"""Downloads Instagram CDN media. Implements MediaGateway."""
 
 from __future__ import annotations
 
@@ -11,6 +11,9 @@ import httpx
 
 from connector.domain.entities import MediaType, Post
 
+# Instagram stills are a few hundred KB; anything past this isn't a preview.
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
 
 class HttpMediaGateway:
     def __init__(self, http: httpx.AsyncClient) -> None:
@@ -18,6 +21,7 @@ class HttpMediaGateway:
 
     @asynccontextmanager
     async def fetch(self, post: Post) -> AsyncIterator[list[Path]]:
+        """All media of a post as temp files, for handing to Telegram."""
         with tempfile.TemporaryDirectory(prefix="connector-media-") as tmpdir:
             paths: list[Path] = []
             for i, media_item in enumerate(post.media):
@@ -30,3 +34,23 @@ class HttpMediaGateway:
                             f.write(chunk)
                 paths.append(path)
             yield paths
+
+    async def download_image(self, url: str) -> tuple[str, bytes] | None:
+        """One still image into memory, or None if the URL doesn't serve a sane image."""
+        async with self.http.stream("GET", url) as resp:
+            resp.raise_for_status()
+            content_type = resp.headers.get("content-type", "").split(";")[0].strip().lower()
+            if not content_type.startswith("image/"):
+                return None
+            declared = resp.headers.get("content-length", "")
+            if declared.isdigit() and int(declared) > MAX_IMAGE_BYTES:
+                return None
+
+            chunks: list[bytes] = []
+            size = 0
+            async for chunk in resp.aiter_bytes():
+                size += len(chunk)
+                if size > MAX_IMAGE_BYTES:
+                    return None
+                chunks.append(chunk)
+            return content_type, b"".join(chunks)

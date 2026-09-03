@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}{{ view.post.caption|summary(60) or "Post" }} – Crossposting{% endblock %}
+
+{% block content %}
+{% set post = view.post %}
+{% set title = post.caption|summary(60) %}
+
+<p class="meta kicker"><a class="plain" href="/">« Alle Posts</a></p>
+<h1 class="h1">{% if title %}{{ title }}{% else %}<span class="muted">Ohne Text</span>{% endif %}</h1>
+<p class="meta">{{ post.posted_at|when(now) }} · <a href="{{ post.permalink }}" target="_blank" rel="noopener">Auf Instagram öffnen</a></p>
+
+<div class="gallery{% if post.media|length == 1 %} single{% endif %}">
+  {% for item in post.media %}
+  <figure class="media">
+    {% if loop.index0 in view.stored_previews %}
+    <img src="/posts/{{ post.id }}/media/{{ loop.index0 }}" alt="">
+    {% elif item.preview_url %}
+    <img src="{{ item.preview_url }}" alt="" referrerpolicy="no-referrer">
+    {% else %}
+    <span class="ph">Video</span>
+    {% endif %}
+    {% if item.type.value == "video" %}<figcaption class="meta">Video</figcaption>{% endif %}
+  </figure>
+  {% endfor %}
+</div>
+
+{% if post.caption %}<p class="body caption">{{ post.caption }}</p>{% endif %}
+
+<section class="details">
+  <p class="eyebrow">Zustellung</p>
+  {% for d in view.deliveries|sort(attribute="chat_id") %}
+  <div class="delivery">
+    <p class="body">{{ d|delivery_label(multi_chat) }}</p>
+    <p class="meta">
+      {%- if d.status.value == "sent" -%}
+        Zugestellt{% if d.sent_at %} {{ d.sent_at|when(now) }}{% endif %}
+      {%- elif d.status.value == "failed" -%}
+        {{ d.attempts }} {{ "Versuch" if d.attempts == 1 else "Versuche" }}, zuletzt nicht durchgekommen
+      {%- elif d.status.value == "pending" -%}
+        Wird gerade gesendet
+      {%- else -%}
+        War vor der Verbindung schon auf Instagram und wurde deshalb nicht gesendet
+      {%- endif -%}
+    </p>
+    {% if d.error %}<p class="meta">{{ d.error|error_text(300) }}</p>{% endif %}
+    {% if d.status.value != "sent" %}
+    <form method="post" action="/resend">
+      <input type="hidden" name="post_id" value="{{ post.id }}">
+      <input type="hidden" name="chat_id" value="{{ d.chat_id }}">
+      <input type="hidden" name="next" value="/posts/{{ post.id }}">
+      <button type="submit" class="btn">{% if multi_chat %}Nochmal an {{ d.chat_id }} senden{% else %}Nochmal senden{% endif %}</button>
+    </form>
+    {% endif %}
+  </div>
+  {% else %}
+  <p class="meta">Noch an keinen Kanal zugestellt.</p>
+  {% endfor %}
+</section>
+{% endblock %}

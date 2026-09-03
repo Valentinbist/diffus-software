@@ -1,65 +1,94 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="card">
-  {% if ov.token %}
-    <p><strong>Connected</strong> &mdash; IG user id: {{ ov.token.ig_user_id or "unknown" }}</p>
-    <p class="muted">
-      Token expires {{ ov.token.expires_at.strftime("%Y-%m-%d") }}
-      ({{ (ov.token.expires_at - now).days }} days left)
-    </p>
+<p class="meta kicker">Instagram → Telegram</p>
+<h1 class="h1">Crossposting</h1>
+
+{% if ov.token %}
+  {% set days_left = (ov.token.expires_at - now).days %}
+  {% set refresh_failed = last_run is not none and last_run.refresh_error %}
+  {% set token_warning = days_left <= 14 or refresh_failed %}
+
+  {% if last_run is none %}
+    <p class="body status">Verbunden. Der erste Abgleich steht noch aus.</p>
+  {% elif last_run.sync_error %}
+    <p class="body status">Hakt. Der Abgleich {{ last_run.at|ago(now) }} ist fehlgeschlagen.</p>
+    <p class="meta">{{ last_run.sync_error|error_text }}</p>
   {% else %}
-    <p><a href="/oauth/login">Connect Instagram</a></p>
+    <p class="body status">Läuft. Letzter Abgleich {{ last_run.at|ago(now) }}.</p>
   {% endif %}
-</div>
 
-<form class="inline" method="post" action="/sync">
-  <button type="submit">Sync now</button>
-</form>
+  {% if refresh_failed %}
+    <p class="meta attention">Token-Auffrischung fehlgeschlagen – bitte neu verbinden.</p>
+  {% endif %}
+  {% if days_left < 0 %}
+    <p class="meta attention">Token ist abgelaufen – bitte neu verbinden.</p>
+  {% elif days_left <= 14 %}
+    <p class="meta attention">Token läuft {% if days_left == 0 %}heute{% elif days_left == 1 %}morgen{% else %}in {{ days_left }} Tagen{% endif %} ab.</p>
+  {% else %}
+    <p class="meta">Token gültig bis {{ ov.token.expires_at|day(now) }}.</p>
+  {% endif %}
 
-<table>
-  <thead>
-    <tr>
-      <th>Posted</th>
-      <th>Caption</th>
-      <th>Media</th>
-      <th>Deliveries</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for view in ov.posts %}
-    <tr>
-      <td>
-        <a href="{{ view.post.permalink }}" target="_blank" rel="noopener">
-          {{ view.post.posted_at.strftime("%Y-%m-%d %H:%M") }}
-        </a>
-      </td>
-      <td>
-        {% set caption = view.post.caption or "" %}
-        {{ caption[:80] }}{% if caption|length > 80 %}&hellip;{% endif %}
-      </td>
-      <td>{{ view.post.media|length }}</td>
-      <td>
-        <div class="delivery-row">
-        {% for d in view.deliveries %}
-          <span class="badge badge-{{ d.status.value }}"
-                {% if d.error %}title="{{ d.error }}"{% endif %}>
-            {{ d.chat_id }}: {{ d.status.value }} ({{ d.attempts }})
-          </span>
-          {% if d.status.value != "sent" %}
-          <form class="inline" method="post" action="/resend">
-            <input type="hidden" name="post_id" value="{{ view.post.id }}">
-            <input type="hidden" name="chat_id" value="{{ d.chat_id }}">
-            <button type="submit">resend</button>
-          </form>
-          {% endif %}
-        {% endfor %}
+  <div class="actions">
+    <form method="post" action="/sync"><button type="submit" class="btn">Jetzt abgleichen</button></form>
+    {% if token_warning %}<a class="btn" href="/oauth/login">Neu verbinden</a>{% endif %}
+  </div>
+{% else %}
+  <div class="notice">
+    <p class="body">Instagram ist noch nicht verbunden. Sobald der Account verbunden ist, landet jeder neue Post im Telegram-Kanal.</p>
+    <div class="actions"><a class="btn btn-solid" href="/oauth/login">Instagram verbinden</a></div>
+  </div>
+{% endif %}
+
+<section class="feed">
+{% for view in ov.posts %}
+  {% set post = view.post %}
+  {% set deliveries = view.deliveries|sort(attribute="chat_id") %}
+  {% set cover = view|stored_cover %}
+  <article class="row">
+    <a class="thumb" href="/posts/{{ post.id }}">
+      {% if cover is not none %}
+      <img src="/posts/{{ post.id }}/media/{{ cover }}" alt="" loading="lazy">
+      {% elif post.cover_url %}
+      <img src="{{ post.cover_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">
+      {% else %}
+      <span class="ph">{{ "Video" if post.media and post.media[0].type.value == "video" else "Bild" }}</span>
+      {% endif %}
+    </a>
+    <div class="row-body">
+      {% set caption = post.caption|summary %}
+      <p class="body"><a class="plain" href="/posts/{{ post.id }}">{% if caption %}{{ caption }}{% else %}<span class="muted">Ohne Text</span>{% endif %}</a></p>
+
+      {% if deliveries|length == 1 %}
+        {% set d = deliveries[0] %}
+        <p class="meta{% if d.status.value == "failed" %} attention{% endif %}">{{ post.posted_at|when(now) }} – {{ d|delivery_label(multi_chat) }}</p>
+      {% else %}
+        <p class="meta">{{ post.posted_at|when(now) }}</p>
+        {% if deliveries %}
+        <div class="targets">
+          {% for d in deliveries %}
+          <span class="meta{% if d.status.value == "failed" %} attention{% endif %}">{{ d|delivery_label(multi_chat) }}</span>
+          {% endfor %}
         </div>
-      </td>
-    </tr>
-    {% else %}
-    <tr><td colspan="4" class="muted">No posts synced yet.</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
+        {% endif %}
+      {% endif %}
+
+      {% for d in deliveries if d.status.value != "sent" %}
+      <div class="fix">
+        {% if d.error %}<p class="meta">{{ d.error|error_text }}</p>{% endif %}
+        <form method="post" action="/resend">
+          <input type="hidden" name="post_id" value="{{ post.id }}">
+          <input type="hidden" name="chat_id" value="{{ d.chat_id }}">
+          <button type="submit" class="btn">{% if multi_chat %}Nochmal an {{ d.chat_id }} senden{% else %}Nochmal senden{% endif %}</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+  </article>
+{% else %}
+  <p class="meta">Noch keine Posts abgeglichen.</p>
+{% endfor %}
+</section>
+
+<p class="meta foot">Nur die letzten 20 Posts. Was vor der Verbindung gepostet wurde, wird übersprungen.</p>
 {% endblock %}

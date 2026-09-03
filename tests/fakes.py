@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from connector.domain.entities import Delivery, DeliveryStatus, Post, Token
+from connector.domain.entities import Delivery, DeliveryStatus, Post, Preview, Token
 
 MAX_ERROR_LENGTH = 2000
 
@@ -110,9 +110,41 @@ class FakeSink:
 
 
 class FakeMedia:
+    """MediaGateway with no files and an in-memory map of downloadable images."""
+
+    def __init__(self, images: dict[str, bytes] | None = None, fail_images: bool = False) -> None:
+        self.images = images or {}
+        self.fail_images = fail_images
+        self.downloads: list[str] = []
+
     @asynccontextmanager
     async def fetch(self, post: Post):
         yield []
+
+    async def download_image(self, url: str) -> tuple[str, bytes] | None:
+        self.downloads.append(url)
+        if self.fail_images:
+            raise RuntimeError("simulated download failure")
+        data = self.images.get(url)
+        return ("image/jpeg", data) if data is not None else None
+
+
+class FakePreviews:
+    def __init__(self) -> None:
+        self._rows: dict[tuple[str, int], Preview] = {}
+
+    async def save(self, preview: Preview) -> None:
+        self._rows[(preview.post_id, preview.index)] = preview
+
+    async def get(self, post_id: str, index: int) -> Preview | None:
+        return self._rows.get((post_id, index))
+
+    async def stored(self, post_ids: Sequence[str]) -> dict[str, frozenset[int]]:
+        grouped: dict[str, set[int]] = {}
+        for post_id, index in self._rows:
+            if post_id in post_ids:
+                grouped.setdefault(post_id, set()).add(index)
+        return {post_id: frozenset(indexes) for post_id, indexes in grouped.items()}
 
 
 class FakeTokens:
