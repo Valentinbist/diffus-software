@@ -19,6 +19,20 @@ from diffus.crossposting.domain.entities import INSTAGRAM_CHANNEL, Destination, 
 from diffus.crossposting.domain.ports import UnitOfWorkFactory
 
 
+def public_base_url_ok(base_url: str, allow_http: bool = False) -> bool:
+    """Whether `base_url` is fit for Instagram to fetch a draft's images from.
+
+    `https://` always qualifies; `http://` only when `allow_http` is set —
+    dev/mocks only (see `Settings.publish_allow_http`); Instagram itself would
+    never accept an `http://` URL. The one rule `GetChannels` and
+    `PublishDraft` both apply, via their own `allow_http` field, so the two
+    can't drift (mirrors `shared.config.is_public_https`, which `Settings`
+    uses for the same rule outside the application layer — see that
+    module's docstring for why application never imports it directly).
+    """
+    return base_url.startswith("https://") or (allow_http and base_url.startswith("http://"))
+
+
 def all_auto(auto: Mapping[Destination, bool], targets: PublishTargets) -> bool:
     """True when every channel `targets` chose has its auto-publish switch on.
 
@@ -65,6 +79,11 @@ class GetChannels:
     source: str
     destinations: Sequence[Destination]
     public_base_url: str
+    # Dev-only: lets an http:// public_base_url count as publishable, so the
+    # local Instagram mock can be exercised without a tunnel. False (the
+    # default) is the only value production ever sets — see
+    # Settings.publish_allow_http.
+    allow_http: bool = False
 
     async def run(self) -> Channels:
         async with self.uow() as uow:
@@ -75,7 +94,7 @@ class GetChannels:
             destination=INSTAGRAM_CHANNEL,
             connected=token is not None,
             can_publish=token is not None and token.can_publish,
-            public_https=self.public_base_url.startswith("https://"),
+            public_https=public_base_url_ok(self.public_base_url, self.allow_http),
             # The switch may be on even while Instagram isn't connected: it's
             # a policy for once it is, not a readiness signal (§6a).
             auto_publish=auto.get(INSTAGRAM_CHANNEL, False),

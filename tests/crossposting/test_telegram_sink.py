@@ -61,6 +61,27 @@ async def test_single_image_post_sends_one_photo(
     assert b"\xff\xd8jpeg" in body
 
 
+async def test_api_base_override_is_used_for_the_request_url(tmp_path: Path):
+    """api_base defaults to the real Telegram host; overriding it (e.g. to the local mock)
+    must change where the sink actually sends the request."""
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"ok": True, "result": {}})
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    sink = TelegramSink(http, BOT_TOKEN, api_base="http://mock:8100/telegram")
+
+    path = tmp_path / "p1-0.jpg"
+    path.write_bytes(b"\xff\xd8jpeg")
+    item = MediaItem(url="https://cdn.example.com/1.jpg", type=MediaType.IMAGE)
+    await sink.deliver(make_post(), "c1", [MediaFile(item=item, path=path)])
+
+    assert len(requests) == 1
+    assert str(requests[0].url) == f"http://mock:8100/telegram/bot{BOT_TOKEN}/sendPhoto"
+
+
 async def test_two_item_post_sends_one_media_group(
     sink: TelegramSink, requests: list[httpx.Request], tmp_path: Path
 ):

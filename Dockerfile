@@ -58,6 +58,10 @@ COPY src ./src
 COPY tests ./tests
 COPY alembic.ini ./
 COPY alembic ./alembic
+# Local mocks of the external APIs (see mocks/ and docker-compose.mocks.yml).
+# Dev only: the runtime stage below never copies this, and it's never
+# imported by src/.
+COPY mocks ./mocks
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint
 # Editable install: the package resolves to /app/src, which docker-compose.yml
 # bind-mounts from the host so uvicorn --reload picks up edits.

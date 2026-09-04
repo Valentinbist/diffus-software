@@ -340,6 +340,20 @@ and give it destinations. No domain, schema or route change.
 with a unique `source` name, emit prefixed post ids, and wire a second
 `SyncPosts`/`EnsureFreshToken` pair. The token row is keyed by the name already.
 
+**Mocks.** `mocks/` (repo root, sibling of `src/`) is a small FastAPI app per
+external API — Instagram (`/graph`, `/api`, `/www`), kalender.digital
+(`/kalender`), Telegram (`/telegram`) — with in-memory seeded state, for
+running the whole app locally without touching any real service (see
+readme.md, "Testing against mocks"). It lives outside `src/diffus` and is
+never imported by it, so it ships in the `dev` Docker image only, never
+`runtime`. `InstagramClient`/`TelegramSink`/`KalenderDigitalClient` all take
+their host(s) as constructor parameters, defaulting to the real ones, which
+is what lets `docker-compose.mocks.yml` point them at the mocks instead —
+the real adapters never know the difference. `tests/mocks/` is what keeps
+the mocks honest: each test runs the *real* adapter against the mock over
+`httpx.ASGITransport`, so a mock drifting out of sync with the real API's
+shape fails a test, not just the manual click-through.
+
 ## Bounded contexts (the backbone)
 
 Members, calendar, onboarding and whatever follows are separate bounded

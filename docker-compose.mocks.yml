@@ -1,0 +1,88 @@
+# Override for docker-compose.yml: runs the app against the three local
+# mocks (mocks/) instead of real Instagram/kalender.digital/Telegram.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.mocks.yml up --build
+#
+# See "Testing against mocks" in readme.md for the walkthrough. Compose
+# merges `environment` across -f files key by key, and a later file's value
+# wins over both the earlier file's `environment` *and* its `env_file` — so
+# every key below overrides whatever .env has, without editing .env itself.
+
+services:
+  # Runs the `dev` image (same as `app`) but as mocks/app.py instead of the
+  # real application; --reload-dir mocks means editing a mock takes effect
+  # without a rebuild, exactly like editing src/ does for `app`.
+  mocks:
+    build:
+      context: .
+      target: dev
+    # The `dev` image's own ENTRYPOINT (docker/entrypoint.sh) unconditionally
+    # runs `alembic upgrade head` before exec'ing the command — right for
+    # `app`, wrong here: mocks/app.py is a plain in-memory FastAPI app with
+    # no database and no DATABASE_URL. Clearing it makes `command` run
+    # directly instead.
+    entrypoint: []
+    command:
+      [
+        "uvicorn",
+        "mocks.app:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8100",
+        "--reload",
+        "--reload-dir",
+        "/app/mocks",
+      ]
+    environment:
+      # Knobs the mocks read at startup — see mocks/instagram.py,
+      # mocks/kalender.py, mocks/telegram.py for what each does.
+      MOCK_INSTAGRAM_QUOTA: "100"
+      MOCK_KALENDER_TOKEN: mock-token
+      MOCK_TELEGRAM_BOT_TOKEN: mock-bot-token
+      MOCK_TELEGRAM_RATE_LIMIT_EVERY: "0"
+    volumes:
+      - ./mocks:/app/mocks
+    ports:
+      - "8100:8100"
+    restart: unless-stopped
+
+  app:
+    environment:
+      # Instagram: graph_base/api_base stay inside the compose network;
+      # authorize_url is the one URL the *browser* follows (clicking
+      # "Instagram verbinden"), so it has to be reachable from the host,
+      # hence localhost instead of the `mocks` service name.
+      INSTAGRAM_GRAPH_BASE: http://mocks:8100/graph
+      INSTAGRAM_API_BASE: http://mocks:8100/api
+      INSTAGRAM_AUTHORIZE_URL: http://localhost:8100/www/oauth/authorize
+      IG_APP_ID: mock
+      IG_APP_SECRET: mock
+      IG_REDIRECT_URI: http://localhost:8000/oauth/callback
+      TELEGRAM_API_BASE: http://mocks:8100/telegram
+      TELEGRAM_BOT_TOKEN: mock-bot-token
+      TELEGRAM_CHAT_IDS: "-100111,-100222"
+      KALENDER_DIGITAL_API_BASE: http://mocks:8100/kalender
+      KALENDER_DIGITAL_TOKEN: mock-token
+      # The mock's Instagram publish step fetches a draft's images from the
+      # app itself over the compose network (http://app:8000/media/drafts/...
+      # — a plain http:// address), so PUBLISH_ALLOW_HTTP has to be on too;
+      # see shared/config.py's docstring for why that's dev/mocks only.
+      PUBLIC_BASE_URL: http://app:8000
+      PUBLISH_ALLOW_HTTP: "true"
+      # Short cadence: see new posts/events land in the UI quickly while
+      # testing, instead of waiting on the production default.
+      POLL_INTERVAL_MINUTES: "1"
+    depends_on:
+      mocks:
+        condition: service_started
+
+  # A separate volume so a mocks run never mixes with a real dev run's
+  # synced posts/events/tokens — same service, same credentials, different
+  # data directory.
+  postgres:
+    volumes:
+      - pgdata_mocks:/var/lib/postgresql/data
+
+volumes:
+  pgdata_mocks:

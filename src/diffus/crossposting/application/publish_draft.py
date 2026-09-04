@@ -48,6 +48,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from diffus.crossposting.application.channels import public_base_url_ok
 from diffus.crossposting.application.deliver import DeliverPost
 from diffus.crossposting.application.draft_media import DraftMediaGateway
 from diffus.crossposting.application.overview import NoEvents
@@ -82,6 +83,12 @@ class PublishDraft:
     sinks: Mapping[str, PostSink]
     destinations: Sequence[Destination]
     public_base_url: str
+    # Dev-only: lets an http:// public_base_url count as publishable, so the
+    # local Instagram mock can be exercised without a tunnel — the same rule
+    # GetChannels.allow_http applies, via the same public_base_url_ok(). False
+    # (the default) is the only value production ever sets — see
+    # Settings.publish_allow_http.
+    allow_http: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)  # noqa: E731
     events: EventDirectory = field(default_factory=NoEvents)
@@ -125,7 +132,7 @@ class PublishDraft:
                 raise NotConnectedError("Instagram ist nicht verbunden.")
             if not token.can_publish:
                 raise DraftError("Instagram neu verbinden, um Veröffentlichen freizuschalten.")
-            if not self.public_base_url.startswith("https://"):
+            if not public_base_url_ok(self.public_base_url, self.allow_http):
                 raise DraftError(
                     "PUBLIC_BASE_URL muss eine öffentliche https-Adresse sein, "
                     "damit Instagram die Bilder laden kann."

@@ -70,6 +70,7 @@ async def seed(
     publisher: FakePublisher | None = None,
     sinks: dict[str, FakeSink] | None = None,
     events: EventDirectory | None = None,
+    allow_http: bool = False,
 ) -> tuple[PublishDraft, FakeUnitOfWork, dict[str, FakeSink]]:
     uow = FakeUnitOfWork(tokens=FakeTokens(token), drafts=FakeDrafts())
     if draft is not None:
@@ -83,6 +84,7 @@ async def seed(
         sinks=sinks,
         destinations=list(destinations),
         public_base_url=public_base_url,
+        allow_http=allow_http,
         events=events if events is not None else NoEvents(),
     )
     return publish, uow, sinks
@@ -229,6 +231,24 @@ async def test_instagram_without_a_public_https_base_url_is_refused():
 
     with pytest.raises(DraftError, match="https"):
         await publish.run(draft.id, PublishTargets(instagram=True, destinations=()))
+
+
+async def test_instagram_with_allow_http_accepts_a_plain_http_base_url():
+    """allow_http (Settings.publish_allow_http) is the dev-only escape hatch that lets
+    Instagram-publish be exercised against the local mock without a tunnel."""
+    draft = make_draft(images=1)
+    publisher = FakePublisher(post=make_instagram_post())
+    publish, _uow, _sinks = await seed(
+        draft,
+        token=make_token(),
+        publisher=publisher,
+        public_base_url="http://localhost:8000",
+        allow_http=True,
+    )
+
+    result = await publish.run(draft.id, PublishTargets(instagram=True, destinations=()))
+
+    assert result.id == "ig-media-1"
 
 
 # -- publisher failure ---------------------------------------------------------------

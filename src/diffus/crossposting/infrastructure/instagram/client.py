@@ -21,8 +21,12 @@ MEDIA_FIELDS = (
 )
 
 # The graph.instagram.com host all publishing calls use, separate from the
-# oauth/token hosts above.
-GRAPH = "https://graph.instagram.com"
+# oauth/token hosts above. Defaults for the constructor params below — real
+# Instagram hosts, so every existing call site and test is untouched; only
+# ever overridden to point at the local Instagram mock (see mocks/instagram.py).
+DEFAULT_GRAPH_BASE = "https://graph.instagram.com"
+DEFAULT_API_BASE = "https://api.instagram.com"
+DEFAULT_AUTHORIZE_URL = "https://www.instagram.com/oauth/authorize"
 
 # instagram_business_basic reads; instagram_business_content_publish is what
 # lets Token.can_publish be true. Changing this string forces every already
@@ -48,12 +52,19 @@ class InstagramClient:
         app_id: str,
         app_secret: str,
         redirect_uri: str,
+        graph_base: str = DEFAULT_GRAPH_BASE,
+        api_base: str = DEFAULT_API_BASE,
+        authorize_url: str = DEFAULT_AUTHORIZE_URL,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self.http = http
         self.app_id = app_id
         self.app_secret = app_secret
         self.redirect_uri = redirect_uri
+        self.graph_base = graph_base
+        self.api_base = api_base
+        # Not self.authorize_url: that name is the AuthGateway method below.
+        self._authorize_url = authorize_url
         # Injectable so tests can poll the readiness loop without really sleeping.
         self.sleep = sleep
 
@@ -66,11 +77,11 @@ class InstagramClient:
             "response_type": "code",
             "scope": self.SCOPES,
         }
-        return f"https://www.instagram.com/oauth/authorize?{urlencode(params)}"
+        return f"{self._authorize_url}?{urlencode(params)}"
 
     async def exchange_code(self, code: str) -> Token:
         resp = await self.http.post(
-            "https://api.instagram.com/oauth/access_token",
+            f"{self.api_base}/oauth/access_token",
             data={
                 "client_id": self.app_id,
                 "client_secret": self.app_secret,
@@ -88,7 +99,7 @@ class InstagramClient:
         external_user_id = str(raw_user_id) if raw_user_id is not None else None
 
         exchange_resp = await self.http.get(
-            "https://graph.instagram.com/access_token",
+            f"{self.graph_base}/access_token",
             params={
                 "grant_type": "ig_exchange_token",
                 "client_secret": self.app_secret,
@@ -111,7 +122,7 @@ class InstagramClient:
 
     async def refresh(self, token: Token) -> Token:
         resp = await self.http.get(
-            "https://graph.instagram.com/refresh_access_token",
+            f"{self.graph_base}/refresh_access_token",
             params={
                 "grant_type": "ig_refresh_token",
                 "access_token": token.access_token.value,
@@ -135,7 +146,7 @@ class InstagramClient:
 
     async def fetch_recent(self, token: Token, limit: int = 25) -> list[Post]:
         resp = await self.http.get(
-            "https://graph.instagram.com/me/media",
+            f"{self.graph_base}/me/media",
             params={
                 "fields": MEDIA_FIELDS,
                 "limit": limit,
@@ -274,13 +285,14 @@ class InstagramClient:
         data: dict[str, str] | None = None,
         params: dict[str, str] | None = None,
     ) -> dict:
-        """POST/GET under GRAPH, mapping a non-2xx response to a PublishError.
+        """POST/GET under graph_base, mapping a non-2xx response to a PublishError.
 
         Built from the JSON error body, never from the request itself, so an
         error message never carries the access token that a query string or
         form body holds.
         """
-        resp = await self.http.request(method, f"{GRAPH}/{path}", data=data, params=params)
+        url = f"{self.graph_base}/{path}"
+        resp = await self.http.request(method, url, data=data, params=params)
         if resp.is_success:
             return resp.json()
         message = str(resp.status_code)

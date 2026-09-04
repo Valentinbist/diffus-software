@@ -145,6 +145,89 @@ async def test_exchange_code_does_the_short_to_long_lived_two_hop():
     assert token.access_token.value == "long-lived-abc"
 
 
+# -- host overrides (graph_base/api_base/authorize_url), e.g. for the local mock --
+
+
+def test_authorize_url_uses_the_overridden_authorize_url():
+    http = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200)))
+    client = InstagramClient(
+        http,
+        app_id="app-id",
+        app_secret="app-secret",
+        redirect_uri="https://example.com/cb",
+        authorize_url="http://mock/www/oauth/authorize",
+    )
+
+    url = client.authorize_url()
+
+    assert url.startswith("http://mock/www/oauth/authorize?")
+
+
+async def test_exchange_code_uses_the_overridden_api_and_graph_base():
+    hosts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hosts.append(f"{request.url.scheme}://{request.url.host}:{request.url.port}")
+        if request.url.path == "/api/oauth/access_token":
+            return httpx.Response(200, json={"access_token": "short", "user_id": 1})
+        assert request.url.path == "/graph/access_token"
+        return httpx.Response(200, json={"access_token": "long", "expires_in": 5_184_000})
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = InstagramClient(
+        http,
+        app_id="app-id",
+        app_secret="app-secret",
+        redirect_uri="https://example.com/cb",
+        graph_base="http://mock:8100/graph",
+        api_base="http://mock:8100/api",
+    )
+
+    token = await client.exchange_code("some-code")
+
+    assert token.access_token.value == "long"
+    assert hosts == ["http://mock:8100", "http://mock:8100"]
+
+
+async def test_requests_going_through__request_also_use_the_overridden_graph_base():
+    """publish_images/fetch_post/fetch_recent all route through _request; graph_base must apply
+    there too, not just to the two hard-coded exchange_code/refresh calls."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url).startswith("http://mock:8100/graph/")
+        return httpx.Response(
+            200,
+            json={
+                "id": "ig-media-1",
+                "media_type": "IMAGE",
+                "media_url": "https://cdn.example.com/1.jpg",
+                "permalink": "https://instagram.com/p/ig-media-1/",
+                "timestamp": "2024-01-01T12:00:00+00:00",
+            },
+        )
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = InstagramClient(
+        http,
+        app_id="app-id",
+        app_secret="app-secret",
+        redirect_uri="https://example.com/cb",
+        graph_base="http://mock:8100/graph",
+    )
+    now = datetime.now(UTC)
+    token = Token(
+        source="instagram",
+        access_token=AccessToken("t"),
+        external_user_id="1",
+        expires_at=now + timedelta(days=60),
+        refreshed_at=now,
+    )
+
+    post = await client.fetch_post(token, "ig-media-1")
+
+    assert post.id == "ig-media-1"
+
+
 async def test_refresh_keeps_source_and_user_id_and_sends_the_old_token():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "graph.instagram.com"

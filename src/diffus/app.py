@@ -121,8 +121,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app_id=settings.ig_app_id,
         app_secret=settings.ig_app_secret,
         redirect_uri=settings.ig_redirect_uri,
+        graph_base=settings.instagram_graph_base,
+        api_base=settings.instagram_api_base,
+        authorize_url=settings.instagram_authorize_url,
     )
-    telegram = TelegramSink(http, settings.telegram_bot_token)
+    telegram = TelegramSink(http, settings.telegram_bot_token, api_base=settings.telegram_api_base)
     # FallbackMediaGateway is THE MediaGateway everywhere a post's media might
     # need to be re-fetched days after the CDN link went stale — a REVIEW
     # delivery approved late is the case that motivates it (see
@@ -199,6 +202,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sinks=sinks,
         destinations=destinations,
         public_base_url=settings.public_base_url,
+        allow_http=settings.publish_allow_http,
         # Shares SyncJob's own lock: publishing and the poller must never run
         # at the same time (see PublishDraft's module docstring).
         lock=job.lock,
@@ -213,6 +217,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         source=instagram.source,
         destinations=destinations,
         public_base_url=settings.public_base_url,
+        allow_http=settings.publish_allow_http,
     )
     # Every channel the app knows about, so a submitted form with some boxes
     # left unchecked can write "off" for them too (SetAutoPublish's full-set

@@ -71,6 +71,28 @@ async def test_instagram_channel_reports_no_public_https_for_a_plain_http_base_u
     assert not channels.instagram.public_https
 
 
+async def test_allow_http_defaults_to_off_so_a_plain_http_base_url_stays_not_public_https():
+    uow = FakeUnitOfWork(tokens=FakeTokens(make_token()))
+    channels = await GetChannels(
+        uow=uow, source="instagram", destinations=[C1], public_base_url="http://localhost:8000"
+    ).run()
+
+    assert not channels.instagram.public_https
+
+
+async def test_allow_http_true_lets_a_plain_http_base_url_count_as_public_https():
+    uow = FakeUnitOfWork(tokens=FakeTokens(make_token()))
+    channels = await GetChannels(
+        uow=uow,
+        source="instagram",
+        destinations=[C1],
+        public_base_url="http://localhost:8000",
+        allow_http=True,
+    ).run()
+
+    assert channels.instagram.public_https
+
+
 async def test_instagram_switch_can_be_on_even_while_not_connected():
     uow = FakeUnitOfWork(channels=FakeChannels({INSTAGRAM_CHANNEL: True}))
     channels = await GetChannels(

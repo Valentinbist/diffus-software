@@ -170,6 +170,65 @@ GHCR: no uv, no sources, runs as the unprivileged `app` user) and `deps` → `de
 pass `--build-arg UID=$(id -u) --build-arg GID=$(id -g)` on Linux if yours
 differs, so the bind mounts stay writable.
 
+### Testing against mocks
+
+The full flow — connect Instagram, poll posts, sync the calendar, compose a
+post, Freigabe, publish to Instagram *and* Telegram, create an event — works
+end to end on a laptop without touching any real service or needing the
+`cloudflared` tunnel above:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.mocks.yml up --build
+```
+
+This is `docker-compose.yml` with a second `-f` override
+(`docker-compose.mocks.yml`) that adds a `mocks` service — `mocks/app.py`,
+running the same `dev` image as `app` — and points the `app` service's
+Instagram/kalender.digital/Telegram settings at it instead of the real
+hosts (compose `environment` overrides `env_file`, so this works without
+touching `.env`). It also gives `postgres` a separate data volume, so a
+mocks run never mixes with a real dev run's synced posts/events/tokens.
+
+What each mock stands in for, and what it fakes:
+
+- **Instagram** (`/graph`, `/api`, `/www`) — OAuth (the authorize redirect
+  hands back a code immediately, no real login), 4 seeded posts (an image, a
+  3-image carousel, a video, and one whose caption names the date of the calendar mock's
+  "Siebdruck-Nachmittag" (the 12th of next month, so the link suggestions have an exact match)
+  for the calendar's link-suggestion heuristic), and a working publish path:
+  creating a container, polling it to `FINISHED`, and `media_publish` — the
+  container creation step really fetches the image from the app's own
+  public media route (`http://app:8000/media/drafts/...`), so publishing to
+  Instagram against the mock exercises that whole path end to end, including
+  `PUBLISH_ALLOW_HTTP` (see below).
+- **kalender.digital** (`/kalender`) — the 7 real sub-calendars and a
+  seeded agenda *relative to today* (a weekly Stammtisch and Plenum, a
+  one-day and a two-day whole-day event, a one-off event next month, one
+  crossing midnight), plus a working `create_event`.
+- **Telegram** (`/telegram`) — records every `sendPhoto`/`sendVideo`/
+  `sendMediaGroup` call instead of sending it anywhere.
+
+Click **Instagram verbinden** as usual — the mock's authorize endpoint
+redirects straight back to the app with a code, no login screen. Inspect
+what happened at `http://localhost:8100/_state` (all three mocks' state, as
+JSON) and `http://localhost:8100/telegram/_calls` (every Telegram call the
+app made); `POST http://localhost:8100/_reset` reseeds everything.
+
+Knobs (env vars on the `mocks` service in `docker-compose.mocks.yml`):
+`MOCK_INSTAGRAM_QUOTA` (default 100 — publishing past it fails like Meta's
+real 100/24h limit), `MOCK_KALENDER_TOKEN` (default `mock-token`),
+`MOCK_TELEGRAM_BOT_TOKEN` (default `mock-bot-token`),
+`MOCK_TELEGRAM_RATE_LIMIT_EVERY` (default `0` — every Nth Telegram call
+answers 429, to exercise `TelegramSink`'s retry).
+
+To run the mocks alone (no Docker, no app): `uv run uvicorn mocks.app:app
+--port 8100 --reload`, or `uv run python -m mocks`. `mocks/` lives outside
+`src/diffus`, is never imported by it, and the `runtime` Docker image never
+ships it — only the `dev` image does (see the `Dockerfile`'s `dev` stage)
+and only `tests/mocks/` (contract tests: the *real* adapters run against
+these mocks, so the two can't silently drift apart) knows about it in the
+test suite.
+
 ## Layers
 
 ```text

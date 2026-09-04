@@ -18,6 +18,8 @@ from diffus.crossposting.infrastructure.telegram.render import render_caption
 
 logger = logging.getLogger(__name__)
 
+# Real default, so every existing call site and test is untouched; only ever
+# overridden to point at the local Telegram mock (see mocks/telegram.py).
 TELEGRAM_API_BASE = "https://api.telegram.org"
 MAX_MEDIA_GROUP_ITEMS = 10
 REQUEST_TIMEOUT = 120.0
@@ -28,9 +30,12 @@ FilesFactory = Callable[[], dict[str, tuple[str, IO[bytes]]]]
 
 
 class TelegramSink:
-    def __init__(self, http: httpx.AsyncClient, bot_token: str) -> None:
+    def __init__(
+        self, http: httpx.AsyncClient, bot_token: str, api_base: str = TELEGRAM_API_BASE
+    ) -> None:
         self.http = http
         self.bot_token = bot_token
+        self.api_base = api_base
 
     async def deliver(self, post: Post, address: str, media: Sequence[MediaFile]) -> None:
         items = list(media)
@@ -71,7 +76,7 @@ class TelegramSink:
         await self._call("sendMediaGroup", data=data, make_files=make_files)
 
     async def _call(self, method: str, data: dict, make_files: FilesFactory) -> None:
-        url = f"{TELEGRAM_API_BASE}/bot{self.bot_token}/{method}"
+        url = f"{self.api_base}/bot{self.bot_token}/{method}"
 
         for attempt in range(1, MAX_RETRIES + 1):
             files = make_files()
