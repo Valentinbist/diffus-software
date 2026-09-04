@@ -1,7 +1,7 @@
 """SQLAlchemy 2.0 declarative models.
 
-Mirrors alembic/versions/0001_initial.py, 0002_previews.py and
-0003_destinations_and_sources.py exactly.
+Mirrors alembic/versions/0001_initial.py, 0002_previews.py,
+0003_destinations_and_sources.py and 0005_drafts_and_scopes.py exactly.
 """
 
 from __future__ import annotations
@@ -18,7 +18,8 @@ from diffus.shared.db.base import Base
 class TokenRow(Base):
     """A source's long-lived credential, one row per source.
 
-    Mirrors alembic/versions/0003_destinations_and_sources.py.
+    Mirrors alembic/versions/0003_destinations_and_sources.py and the
+    `scopes` column added in 0005_drafts_and_scopes.py.
     """
 
     __tablename__ = "tokens"
@@ -28,6 +29,7 @@ class TokenRow(Base):
     external_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    scopes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class PostRow(Base):
@@ -79,3 +81,40 @@ class DeliveryRow(Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class PostDraftRow(Base):
+    """A post being composed. Mirrors alembic/versions/0005_drafts_and_scopes.py.
+
+    `post_id` has no foreign key: the post it produces is created only once
+    publishing succeeds, and the draft outlives it as an audit trail (see the
+    migration docstring).
+    """
+
+    __tablename__ = "post_drafts"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    caption: Mapped[str] = mapped_column(Text, nullable=False)
+    public_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    post_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PostDraftMediaRow(Base):
+    """One uploaded, normalised draft image. Mirrors alembic/versions/0005_drafts_and_scopes.py."""
+
+    __tablename__ = "post_draft_media"
+
+    draft_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("post_drafts.id", ondelete="CASCADE"), primary_key=True
+    )
+    media_index: Mapped[int] = mapped_column(Integer, primary_key=True)
+    content_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    width: Mapped[int] = mapped_column(Integer, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, nullable=False)
+    data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)

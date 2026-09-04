@@ -2,15 +2,26 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from diffus.calendar.application.calendar_events import CalendarPage, EventPostStatus, EventView
+from diffus.calendar.application.compose_post import ComposeForm, ComposePrefill, ComposePreview
+from diffus.calendar.application.create_event import EventForm
 from diffus.calendar.application.event_detail import EventDetail, SuggestedPost
 from diffus.calendar.application.link_picker import LinkPicker, LinkPickerEvent
 from diffus.calendar.application.suggest_posts import SuggestionReason
 from diffus.calendar.application.sync_job import CalendarLastRun
-from diffus.calendar.domain.entities import CalendarEvent, EventLink, LinkablePost, SubCalendar
+from diffus.calendar.domain.entities import (
+    CalendarEvent,
+    DraftPreview,
+    EventLink,
+    InstagramState,
+    LinkablePost,
+    PublishOptions,
+    SubCalendar,
+    TelegramTarget,
+)
 from diffus.calendar.presentation import display
 from diffus.calendar.presentation.routes import build_templates
 
@@ -301,3 +312,131 @@ def test_link_picker_page_shows_suggestions_and_the_upcoming_list():
     assert "Termine der nächsten 60 Tage" in html
     assert "Verknüpft ✓" in html
     assert '<a class="plain back" href="/posts/p1">« Zum Post</a>' in html
+
+
+# -- compose page -------------------------------------------------------------------
+
+
+def make_compose_form(
+    instagram_state: InstagramState = InstagramState.READY, caption: str = "Fest\n📅 Text"
+) -> ComposeForm:
+    event = make_event()
+    view = make_view(event)
+    options = PublishOptions(
+        instagram=instagram_state, targets=(TelegramTarget(address="c1", label="Telegram"),)
+    )
+    return ComposeForm(view=view, prefill=ComposePrefill(caption=caption), options=options)
+
+
+def test_compose_page_shows_the_prefilled_caption_and_the_checked_telegram_target():
+    html = templates.env.get_template("compose.html").render(
+        form=make_compose_form(), error=None, now=NOW
+    )
+
+    assert "Post erstellen" in html
+    assert "Fest\n📅 Text" in html
+    assert 'name="telegram" value="c1" checked' in html
+    assert "disabled" not in html
+
+
+def test_compose_page_disables_instagram_and_shows_the_hint_when_not_connected():
+    html = templates.env.get_template("compose.html").render(
+        form=make_compose_form(instagram_state=InstagramState.NOT_CONNECTED), error=None, now=NOW
+    )
+
+    assert "disabled" in html
+    assert "Instagram ist nicht verbunden." in html
+
+
+def test_compose_page_shows_an_error_notice():
+    html = templates.env.get_template("compose.html").render(
+        form=make_compose_form(), error="Höchstens 10 Bilder und 20 MB pro Post.", now=NOW
+    )
+
+    assert '<div class="notice">' in html
+    assert "Höchstens 10 Bilder" in html
+
+
+# -- compose preview page ------------------------------------------------------------
+
+
+def make_compose_preview(image_urls=("/drafts/d1/media/0", "/drafts/d1/media/1")) -> ComposePreview:
+    event = make_event()
+    view = make_view(event)
+    options = PublishOptions(
+        instagram=InstagramState.READY, targets=(TelegramTarget(address="c1", label="Telegram"),)
+    )
+    draft = DraftPreview(id="d1", caption="Hallo Welt", image_urls=image_urls)
+    return ComposePreview(view=view, draft=draft, options=options)
+
+
+def test_compose_preview_page_shows_the_images_caption_and_hidden_chosen_targets():
+    html = templates.env.get_template("compose_preview.html").render(
+        preview=make_compose_preview(), instagram=False, telegram=["c1"], error=None, now=NOW
+    )
+
+    assert "Vorschau" in html
+    assert 'src="/drafts/d1/media/0"' in html
+    assert 'src="/drafts/d1/media/1"' in html
+    assert "Hallo Welt" in html
+    assert '<input type="hidden" name="telegram" value="c1">' in html
+    assert "Telegram" in html
+
+
+def test_compose_preview_page_shows_an_error_notice():
+    html = templates.env.get_template("compose_preview.html").render(
+        preview=make_compose_preview(), instagram=False, telegram=[], error="Instagram: boom",
+        now=NOW,
+    )
+
+    assert '<div class="notice">' in html
+    assert "Instagram: boom" in html
+
+
+# -- new event page -------------------------------------------------------------------
+
+
+def make_event_form() -> EventForm:
+    return EventForm(
+        title="Fest",
+        day=date(2026, 9, 12),
+        start=time(18, 0),
+        end=time(22, 0),
+        whole_day=False,
+        description="Text",
+        location="Ort",
+        who="Jona",
+        sub_calendar_ids=frozenset({SUB_CALENDAR.id}),
+    )
+
+
+def test_new_event_page_shows_the_post_header_and_the_prefilled_form():
+    post = make_post("p1", caption="Sommerfest")
+    html = templates.env.get_template("new_event.html").render(
+        post=post, form=make_event_form(), sub_calendars=[SUB_CALENDAR], error=None, now=NOW
+    )
+
+    assert "Termin anlegen" in html
+    assert "Sommerfest" in html
+    assert 'value="Fest"' in html
+    assert 'value="2026-09-12"' in html
+    assert 'value="18:00"' in html
+    assert 'value="22:00"' in html
+    assert 'value="Ort"' in html
+    assert 'value="Jona"' in html
+    assert SUB_CALENDAR.name in html
+    assert "checked" in html
+
+
+def test_new_event_page_shows_an_error_notice():
+    post = make_post("p1")
+    html = templates.env.get_template("new_event.html").render(
+        post=post,
+        form=make_event_form(),
+        sub_calendars=[SUB_CALENDAR],
+        error="Das Ende muss nach dem Beginn liegen.",
+        now=NOW,
+    )
+
+    assert '<div class="notice">' in html
+    assert "Das Ende muss nach dem Beginn liegen." in html

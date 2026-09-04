@@ -18,8 +18,13 @@ from typing import Self
 from diffus.calendar.domain.entities import (
     CalendarEvent,
     CalendarSnapshot,
+    DraftPreview,
+    DraftRef,
     EventLink,
     LinkablePost,
+    NewEvent,
+    PublishedPost,
+    PublishOptions,
     SubCalendar,
 )
 from diffus.calendar.domain.ports import (
@@ -35,10 +40,26 @@ class FakeCalendar:
     def __init__(self, snapshot: CalendarSnapshot) -> None:
         self.snapshot = snapshot
         self.calls: list[tuple[date, date]] = []
+        self.created: list[NewEvent] = []
 
     async def fetch(self, start: date, end: date) -> CalendarSnapshot:
         self.calls.append((start, end))
         return self.snapshot
+
+    async def create_event(self, draft: NewEvent) -> CalendarEvent:
+        self.created.append(draft)
+        return CalendarEvent(
+            id=f"new-{len(self.created)}",
+            title=draft.title,
+            description=draft.description,
+            who=draft.who,
+            location=draft.location,
+            starts_at=draft.starts_at,
+            ends_at=draft.ends_at,
+            whole_day=draft.whole_day,
+            sub_calendar_ids=draft.sub_calendar_ids,
+            series_id=None,
+        )
 
 
 class FailingCalendar:
@@ -48,6 +69,9 @@ class FailingCalendar:
         self.error = error
 
     async def fetch(self, start: date, end: date) -> CalendarSnapshot:
+        raise self.error
+
+    async def create_event(self, draft: NewEvent) -> CalendarEvent:
         raise self.error
 
 
@@ -219,3 +243,46 @@ class FakePostCatalog:
     async def by_ids(self, ids: Sequence[str]) -> dict[str, LinkablePost]:
         by_id = {post.id: post for post in self.posts}
         return {post_id: by_id[post_id] for post_id in ids if post_id in by_id}
+
+
+class FakePublisher:
+    """PostPublisher that records every call and either fails or returns fixed results.
+
+    Mirrors tests/crossposting/fakes.py::FakePublisher one layer up: this one
+    stands in for the whole CrosspostingPublisher adapter, not just the
+    Instagram client underneath it.
+    """
+
+    def __init__(self, options: PublishOptions, fail: Exception | None = None) -> None:
+        self.options_value = options
+        self.fail = fail
+        self.created: list[tuple[str, list[str]]] = []
+        self.published: list[tuple[str, bool, list[str]]] = []
+        self.discarded: list[str] = []
+
+    async def options(self) -> PublishOptions:
+        return self.options_value
+
+    async def create_draft(
+        self, caption: str, uploads: Sequence[tuple[str, bytes]]
+    ) -> DraftRef:
+        if self.fail is not None:
+            raise self.fail
+        self.created.append((caption, [name for name, _data in uploads]))
+        return DraftRef(id="d1")
+
+    async def get_draft(self, draft_id: str) -> DraftPreview | None:
+        if draft_id != "d1":
+            return None
+        return DraftPreview(id="d1", caption="caption", image_urls=("/drafts/d1/media/0",))
+
+    async def publish(
+        self, draft_id: str, instagram: bool, telegram_addresses: Sequence[str]
+    ) -> PublishedPost:
+        if self.fail is not None:
+            raise self.fail
+        self.published.append((draft_id, instagram, list(telegram_addresses)))
+        return PublishedPost(id="diffus:d1", permalink="", detail_url="/posts/diffus:d1")
+
+    async def discard(self, draft_id: str) -> None:
+        self.discarded.append(draft_id)

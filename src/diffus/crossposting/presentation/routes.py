@@ -87,6 +87,24 @@ async def post_media(post_id: str, index: int, services: ServicesDep):
     )
 
 
+@router.get("/drafts/{draft_id}/media/{index}")
+async def draft_media(draft_id: str, index: int, services: ServicesDep):
+    """A still-unpublished draft's image, for the compose wizard's own preview.
+
+    Authenticated (this router requires Basic auth already), unlike the
+    public `GET /media/drafts/...` route on public_router — that one exists
+    only so Instagram itself can fetch the image at publish time.
+    """
+    image = await services.draft_image.run(draft_id, index)
+    if image is None:
+        raise HTTPException(status_code=404, detail="no such draft image")
+    return Response(
+        content=image.data,
+        media_type=image.content_type,
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
+
+
 @router.post("/sync")
 async def sync_now(services: ServicesDep):
     # Same job the scheduler runs, so a manual sync also heals a stale token.

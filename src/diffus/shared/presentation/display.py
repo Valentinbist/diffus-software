@@ -10,22 +10,18 @@ import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-MONTHS = (
-    "Januar",
-    "Februar",
-    "März",
-    "April",
-    "Mai",
-    "Juni",
-    "Juli",
-    "August",
-    "September",
-    "Oktober",
-    "November",
-    "Dezember",
-)
+from diffus.shared.dates import MONTHS, WEEKDAYS
 
-WEEKDAYS = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
+__all__ = [
+    "MONTHS",
+    "WEEKDAYS",
+    "format_day",
+    "format_when",
+    "format_ago",
+    "summary",
+    "redact",
+    "error_text",
+]
 
 # Error strings come from httpx and quote the request URL, which carries the
 # Instagram access token / Telegram bot token / kalender.digital capability

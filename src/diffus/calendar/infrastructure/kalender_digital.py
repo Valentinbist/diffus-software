@@ -16,12 +16,14 @@ shared/presentation/display.py, which redacts it from rendered error text).
 from __future__ import annotations
 
 import re
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
 
-from diffus.calendar.domain.entities import CalendarEvent, CalendarSnapshot, SubCalendar
+from diffus.calendar.domain.entities import CalendarEvent, CalendarSnapshot, NewEvent, SubCalendar
+from diffus.calendar.domain.errors import CalendarError
+from diffus.shared.presentation.display import redact
 
 API_BASE = "https://api.kalender.digital"
 FALLBACK_COLOR = "#4C4C4C"
@@ -29,10 +31,18 @@ _COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 
 class KalenderDigitalClient:
-    def __init__(self, http: httpx.AsyncClient, *, token: str, api_base: str = API_BASE) -> None:
+    def __init__(
+        self,
+        http: httpx.AsyncClient,
+        *,
+        token: str,
+        api_base: str = API_BASE,
+        time_zone: str = "Europe/Berlin",
+    ) -> None:
         self.http = http
         self.token = token
         self.api_base = api_base
+        self.time_zone = time_zone
 
     async def fetch(self, start: date, end: date) -> CalendarSnapshot:
         resp = await self.http.get(
@@ -59,6 +69,57 @@ class KalenderDigitalClient:
             sub_calendars=self._parse_sub_calendars(payload),
             events=self._parse_events(events_resp.json(), tz),
         )
+
+    async def create_event(self, draft: NewEvent) -> CalendarEvent:
+        """Writes a new event and reads it back — the undocumented write API (see the
+        module docstring). Any httpx error is redacted (the token rides in the query
+        string) before it becomes a CalendarError the UI can show as-is."""
+        tz = ZoneInfo(self.time_zone)
+        start_local = draft.starts_at.astimezone(tz)
+        if draft.whole_day:
+            last_day = (draft.ends_at.astimezone(tz) - timedelta(seconds=1)).date()
+            start_date = f"{start_local.date().isoformat()} 00:00:00"
+            end_date = f"{last_day.isoformat()} 23:59:59"
+        else:
+            end_local = draft.ends_at.astimezone(tz)
+            start_date = start_local.strftime("%Y-%m-%d %H:%M:%S")
+            end_date = end_local.strftime("%Y-%m-%d %H:%M:%S")
+
+        body = {
+            "event": {
+                "start_date": start_date,
+                "end_date": end_date,
+                "title": draft.title,
+                "text": draft.description or "",
+                "who": draft.who or "",
+                "where": draft.location or "",
+                "subCalendars": sorted(draft.sub_calendar_ids),
+                "wholeDay": draft.whole_day,
+                "repeatInterval": 0,
+            },
+            "capabilityId": self.token,
+            "seriesEdit": None,
+        }
+        try:
+            resp = await self.http.post(
+                f"{self.api_base}/event", json=body, params={"timeZone": self.time_zone}
+            )
+            resp.raise_for_status()
+            event_id = resp.json()["eventId"]
+
+            get_resp = await self.http.get(
+                f"{self.api_base}/event/{event_id}",
+                params={"capabilityId": self.token, "timeZone": self.time_zone},
+            )
+            get_resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise CalendarError(redact(str(exc))) from exc
+
+        payload = get_resp.json()
+        events = self._parse_events([payload] if isinstance(payload, dict) else payload, tz)
+        if not events:
+            raise CalendarError("kalender.digital hat keinen Termin zurückgegeben.")
+        return events[0]
 
     @classmethod
     def _parse_sub_calendars(cls, payload: dict) -> tuple[SubCalendar, ...]:

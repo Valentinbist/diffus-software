@@ -20,14 +20,18 @@ from diffus.crossposting.domain.entities import (
     AccessToken,
     Delivery,
     Destination,
+    DraftImage,
     LinkedEvent,
     MediaFile,
     Post,
+    PostDraft,
     Preview,
     Token,
 )
+from diffus.crossposting.domain.errors import InvalidImageError
 from diffus.crossposting.domain.ports import (
     DeliveryRepository,
+    DraftRepository,
     PostRepository,
     PreviewRepository,
     TokenRepository,
@@ -176,6 +180,80 @@ class FakeTokens:
         self.dirty = True
 
 
+class FakeDrafts:
+    def __init__(self) -> None:
+        self._drafts: dict[str, PostDraft] = {}
+        self.dirty = False
+
+    async def add(self, draft: PostDraft) -> None:
+        self._drafts[draft.id] = dataclasses.replace(draft, images=tuple(draft.images))
+        self.dirty = True
+
+    async def update(self, draft: PostDraft) -> None:
+        existing = self._drafts.get(draft.id)
+        if existing is None:
+            return
+        self._drafts[draft.id] = dataclasses.replace(
+            existing,
+            status=draft.status,
+            error=draft.error,
+            post_id=draft.post_id,
+            published_at=draft.published_at,
+        )
+        self.dirty = True
+
+    async def get(self, draft_id: str) -> PostDraft | None:
+        draft = self._drafts.get(draft_id)
+        return dataclasses.replace(draft) if draft is not None else None
+
+    async def get_image(self, draft_id: str, index: int) -> DraftImage | None:
+        draft = self._drafts.get(draft_id)
+        if draft is None or index >= len(draft.images):
+            return None
+        return draft.images[index]
+
+    async def public_key(self, draft_id: str) -> str | None:
+        draft = self._drafts.get(draft_id)
+        return draft.public_key if draft is not None else None
+
+    async def delete(self, draft_id: str) -> None:
+        self._drafts.pop(draft_id, None)
+        self.dirty = True
+
+
+class FakeImageProcessor:
+    """ImageProcessor that skips Pillow entirely: a fixed 1x1 image, or a simulated failure."""
+
+    def __init__(self, fail: bool = False) -> None:
+        self.fail = fail
+
+    def normalise(self, data: bytes) -> DraftImage:
+        if self.fail:
+            raise InvalidImageError("simulated decode failure")
+        return DraftImage("image/jpeg", 1, 1, data)
+
+
+class FakePublisher:
+    """MediaPublisher that records every call and either fails or returns a fixed post."""
+
+    source = "instagram"
+
+    def __init__(self, post: Post | None = None, fail: Exception | None = None) -> None:
+        self.post = post
+        self.fail = fail
+        self.calls: list[tuple[list[str], str]] = []
+
+    async def publish_images(self, token: Token, image_urls: Sequence[str], caption: str) -> str:
+        self.calls.append((list(image_urls), caption))
+        if self.fail is not None:
+            raise self.fail
+        return "ig-media-1"
+
+    async def fetch_post(self, token: Token, post_id: str) -> Post:
+        assert self.post is not None, "test must pass FakePublisher(post=...) to call fetch_post"
+        return self.post
+
+
 class FakeEventDirectory:
     """EventDirectory over a fixed mapping, the way a real calendar-context adapter would answer."""
 
@@ -187,9 +265,10 @@ class FakeEventDirectory:
 
 
 class FakeAuth:
-    """AuthGateway that stamps a fresh 60-day token on every refresh."""
+    """AuthGateway that stamps a fresh 60-day token, with the publish scope, on every refresh."""
 
     source = "instagram"
+    SCOPES = "instagram_business_basic,instagram_business_content_publish"
 
     def __init__(self, fail: bool = False) -> None:
         self.fail = fail
@@ -208,6 +287,7 @@ class FakeAuth:
             external_user_id="1",
             expires_at=now + timedelta(days=60),
             refreshed_at=now,
+            scopes=self.SCOPES,
         )
 
     async def refresh(self, token: Token) -> Token:
@@ -221,6 +301,7 @@ class FakeAuth:
             external_user_id=token.external_user_id,
             expires_at=now + timedelta(days=60),
             refreshed_at=now,
+            scopes=token.scopes or self.SCOPES,
         )
 
 
@@ -238,6 +319,7 @@ class FakeUnitOfWork:
         deliveries: FakeDeliveries | None = None,
         previews: FakePreviews | None = None,
         tokens: FakeTokens | None = None,
+        drafts: FakeDrafts | None = None,
     ) -> None:
         # Kept as concrete types privately so __aexit__/commit/rollback can flip
         # `dirty`; exposed publicly at the Protocol type, like SqlUnitOfWork's
@@ -246,10 +328,12 @@ class FakeUnitOfWork:
         self._deliveries = deliveries if deliveries is not None else FakeDeliveries()
         self._previews = previews if previews is not None else FakePreviews()
         self._tokens = tokens if tokens is not None else FakeTokens()
+        self._drafts = drafts if drafts is not None else FakeDrafts()
         self.posts: PostRepository = self._posts
         self.deliveries: DeliveryRepository = self._deliveries
         self.previews: PreviewRepository = self._previews
         self.tokens: TokenRepository = self._tokens
+        self.drafts: DraftRepository = self._drafts
         self.commits = 0
 
     def __call__(self) -> Self:
@@ -269,6 +353,7 @@ class FakeUnitOfWork:
             or self._deliveries.dirty
             or self._previews.dirty
             or self._tokens.dirty
+            or self._drafts.dirty
         )
         try:
             if exc_type is None and dirty:
@@ -288,3 +373,4 @@ class FakeUnitOfWork:
         self._deliveries.dirty = False
         self._previews.dirty = False
         self._tokens.dirty = False
+        self._drafts.dirty = False

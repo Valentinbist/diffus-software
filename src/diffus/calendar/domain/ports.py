@@ -18,14 +18,46 @@ from typing import Protocol, Self
 from diffus.calendar.domain.entities import (
     CalendarEvent,
     CalendarSnapshot,
+    DraftPreview,
+    DraftRef,
     EventLink,
     LinkablePost,
+    NewEvent,
+    PublishedPost,
+    PublishOptions,
     SubCalendar,
 )
 
 
 class CalendarGateway(Protocol):
     async def fetch(self, start: date, end: date) -> CalendarSnapshot: ...
+
+    async def create_event(self, draft: NewEvent) -> CalendarEvent:
+        """Writes a new event into the source and reads it back. Network, no unit of work."""
+        ...
+
+
+class PostPublisher(Protocol):
+    """Composes and publishes a post via the crossposting context — see
+    calendar/infrastructure/crossposting.py::CrosspostingPublisher, the adapter
+    over crossposting's own drafting/publishing use cases (the sanctioned
+    exception to "contexts never call each other's application layer", this
+    time for a *command*, not just a read — see docs/architecture.md).
+    """
+
+    async def options(self) -> PublishOptions: ...
+
+    async def create_draft(
+        self, caption: str, uploads: Sequence[tuple[str, bytes]]
+    ) -> DraftRef: ...
+
+    async def get_draft(self, draft_id: str) -> DraftPreview | None: ...
+
+    async def publish(
+        self, draft_id: str, instagram: bool, telegram_addresses: Sequence[str]
+    ) -> PublishedPost: ...
+
+    async def discard(self, draft_id: str) -> None: ...
 
 
 class PostCatalog(Protocol):

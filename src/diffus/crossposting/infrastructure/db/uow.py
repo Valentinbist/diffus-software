@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from diffus.crossposting.infrastructure.db.repositories import (
     SqlDeliveryRepository,
+    SqlDraftRepository,
     SqlPostRepository,
     SqlPreviewRepository,
     SqlTokenRepository,
@@ -26,6 +27,7 @@ class SqlUnitOfWork:
     deliveries: SqlDeliveryRepository
     previews: SqlPreviewRepository
     tokens: SqlTokenRepository
+    drafts: SqlDraftRepository
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sf = session_factory
@@ -36,6 +38,7 @@ class SqlUnitOfWork:
         self.deliveries = SqlDeliveryRepository(self._session)
         self.previews = SqlPreviewRepository(self._session)
         self.tokens = SqlTokenRepository(self._session)
+        self.drafts = SqlDraftRepository(self._session)
         return self
 
     async def __aexit__(

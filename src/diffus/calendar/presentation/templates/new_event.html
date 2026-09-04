@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% set active_page = "posts" %}
+
+{% block title %}Termin anlegen{% endblock %}
+
+{% block content %}
+<p class="meta kicker"><a class="plain back" href="/posts/{{ post.id }}">« Zum Post</a></p>
+<h1 class="h1">Termin anlegen</h1>
+
+<article class="row">
+  <a class="thumb" href="{{ post.detail_url }}" data-modal>
+    {% if post.thumbnail_url %}<img src="{{ post.thumbnail_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% else %}<span class="ph">Bild</span>{% endif %}
+  </a>
+  <div class="row-body">
+    <p class="body">{{ (post.caption|summary) or "Ohne Text" }}</p>
+    <p class="meta">{{ post.posted_at|when(now) }}</p>
+  </div>
+</article>
+
+{% if error %}
+<div class="notice"><p class="body">{{ error|error_text }}</p></div>
+{% endif %}
+
+<form method="post" action="/calendar/events/new" class="stack">
+  <input type="hidden" name="post_id" value="{{ post.id }}">
+  <input type="text" name="title" value="{{ form.title }}" required>
+  <input type="date" name="day" value="{{ form.day.isoformat() }}" required>
+  <input type="time" name="start" value="{{ form.start.strftime('%H:%M') }}" required>
+  <input type="time" name="end" value="{{ form.end.strftime('%H:%M') }}" required>
+  <label><input type="checkbox" name="whole_day" {% if form.whole_day %}checked{% endif %}> Ganztägig</label>
+
+  <p class="meta tags">
+    {% for sc in sub_calendars %}
+    <label>
+      <input type="checkbox" name="cal" value="{{ sc.id }}" {% if sc.id in form.sub_calendar_ids %}checked{% endif %}>
+      <span class="dot" style="background:{{ sc.color }}"></span>{{ sc.name }}
+    </label>
+    {% endfor %}
+  </p>
+
+  <textarea name="description" rows="6">{{ form.description }}</textarea>
+  <input type="text" name="location" placeholder="Ort" value="{{ form.location }}">
+  <input type="text" name="who" placeholder="Eingetragen von" value="{{ form.who }}">
+
+  <div class="actions">
+    <button type="submit" class="btn btn-solid">Termin anlegen</button>
+    <a class="btn" href="/posts/{{ post.id }}">Abbrechen</a>
+  </div>
+</form>
+{% endblock %}

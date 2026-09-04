@@ -14,9 +14,17 @@ from fastapi import Request
 from fastapi.templating import Jinja2Templates
 
 from diffus.crossposting.application.connect_instagram import ConnectInstagram
+from diffus.crossposting.application.drafts import (
+    CreateDraft,
+    DiscardDraft,
+    GetDraft,
+    GetDraftImage,
+)
 from diffus.crossposting.application.overview import GetOverview
 from diffus.crossposting.application.post_detail import GetPostDetail
 from diffus.crossposting.application.preview import GetPreview
+from diffus.crossposting.application.publish_draft import PublishDraft
+from diffus.crossposting.application.publish_readiness import GetPublishReadiness
 from diffus.crossposting.application.resend_delivery import ResendDelivery
 from diffus.crossposting.application.sync_job import SyncJob
 from diffus.crossposting.domain.entities import Destination
@@ -32,6 +40,12 @@ class Services:
     preview: GetPreview
     destinations: Sequence[Destination]
     templates: Jinja2Templates
+    create_draft: CreateDraft
+    publish_draft: PublishDraft
+    discard_draft: DiscardDraft
+    get_draft: GetDraft
+    draft_image: GetDraftImage
+    readiness: GetPublishReadiness
 
 
 def get_services(request: Request) -> Services:

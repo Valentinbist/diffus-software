@@ -43,3 +43,21 @@ def test_render_caption_handles_missing_caption():
     rendered = render_caption(post)
 
     assert post.permalink in rendered
+
+
+def test_render_caption_omits_the_instagram_link_when_there_is_no_permalink():
+    # App-originated ("diffus:...") posts have no Instagram permalink at all.
+    post = Post(
+        id="diffus:abc",
+        source="diffus",
+        caption="Siebdruck-Nachmittag",
+        permalink="",
+        media=(MediaItem(url="https://example.com/1.jpg", type=MediaType.IMAGE),),
+        posted_at=datetime(2024, 1, 1, tzinfo=UTC),
+    )
+
+    rendered = render_caption(post)
+
+    assert rendered == "Siebdruck-Nachmittag"
+    assert "Instagram" not in rendered
+    assert "<a href" not in rendered

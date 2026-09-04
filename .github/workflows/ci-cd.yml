@@ -137,6 +137,7 @@ jobs:
             TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
             TELEGRAM_CHAT_IDS=${{ secrets.TELEGRAM_CHAT_IDS }}
             KALENDER_DIGITAL_TOKEN=${{ secrets.KALENDER_DIGITAL_TOKEN }}
+            PUBLIC_BASE_URL=https://${{ secrets.APP_DOMAIN }}
             BASIC_AUTH_USERNAME=${{ secrets.BASIC_AUTH_USERNAME }}
             BASIC_AUTH_PASSWORD=${{ secrets.BASIC_AUTH_PASSWORD }}
         run: |

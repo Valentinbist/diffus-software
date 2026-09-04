@@ -11,8 +11,13 @@ ELLIPSIS = "…"
 
 
 def render_caption(post: Post) -> str:
-    permalink = html.escape(post.permalink, quote=True)
-    suffix = f'\n\n<a href="{permalink}">Instagram ↗</a>'
+    # App-originated posts (id "diffus:<draft id>") have no Instagram permalink
+    # at all — nothing to link to, so the suffix is skipped rather than
+    # rendering a link to an empty href.
+    suffix = ""
+    if post.permalink:
+        permalink = html.escape(post.permalink, quote=True)
+        suffix = f'\n\n<a href="{permalink}">Instagram ↗</a>'
 
     caption = html.escape(post.caption or "")
     available = MAX_CAPTION_LENGTH - len(suffix)

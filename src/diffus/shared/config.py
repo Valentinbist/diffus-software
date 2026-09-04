@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     calendar_past_months: int = 3
     calendar_future_months: int = 6
 
+    # Where this app itself is publicly reachable, so Instagram can fetch a
+    # draft's images from `/media/drafts/...`. Empty disables nothing by
+    # itself, but PublishDraft refuses an Instagram target unless this is a
+    # public https URL — see public_https below.
+    public_base_url: str = ""
+
     @property
     def chat_ids(self) -> list[str]:
         return [c.strip() for c in self.telegram_chat_ids.split(",") if c.strip()]
@@ -42,6 +48,10 @@ class Settings(BaseSettings):
     @property
     def calendar_enabled(self) -> bool:
         return bool(self.kalender_digital_token)
+
+    @property
+    def public_https(self) -> bool:
+        return self.public_base_url.startswith("https://")
 
 
 @lru_cache

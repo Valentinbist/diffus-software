@@ -1,13 +1,15 @@
 """SQLAlchemy 2.0 declarative models.
 
-Mirrors alembic/versions/0004_calendar.py exactly.
+Mirrors alembic/versions/0004_calendar.py, plus the
+`ix_calendar_event_posts_post_id` index added in
+alembic/versions/0005_drafts_and_scopes.py.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from diffus.shared.db.base import Base
@@ -67,6 +69,7 @@ class EventPostRow(Base):
     """
 
     __tablename__ = "calendar_event_posts"
+    __table_args__ = (Index("ix_calendar_event_posts_post_id", "post_id"),)
 
     event_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("calendar_events.id", ondelete="CASCADE"), primary_key=True

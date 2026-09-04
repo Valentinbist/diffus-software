@@ -11,6 +11,9 @@ from diffus.crossposting.domain.entities import (
     Delivery,
     DeliveryStatus,
     Destination,
+    DraftImage,
+    DraftStatus,
+    PostDraft,
     Token,
 )
 
@@ -140,3 +143,85 @@ def test_token_refreshes_once_the_timer_is_reached():
 def test_token_refreshes_when_expiry_is_close_even_if_recently_refreshed():
     assert not make_token(age_days=1, days_left=8).needs_refresh(NOW)
     assert make_token(age_days=1, days_left=7).needs_refresh(NOW)
+
+
+def test_token_can_publish_only_with_the_publish_scope():
+    connected = make_token(age_days=1)
+    assert not connected.can_publish
+
+    with_basic_only = Token(
+        source="instagram",
+        access_token=AccessToken("t"),
+        external_user_id="1",
+        expires_at=NOW + timedelta(days=60),
+        refreshed_at=NOW,
+        scopes="instagram_business_basic",
+    )
+    assert not with_basic_only.can_publish
+
+    with_publish = Token(
+        source="instagram",
+        access_token=AccessToken("t"),
+        external_user_id="1",
+        expires_at=NOW + timedelta(days=60),
+        refreshed_at=NOW,
+        scopes="instagram_business_basic,instagram_business_content_publish",
+    )
+    assert with_publish.can_publish
+
+
+# -- PostDraft -----------------------------------------------------------------
+
+
+def make_image(marker: bytes = b"data") -> DraftImage:
+    return DraftImage(content_type="image/jpeg", width=100, height=100, data=marker)
+
+
+def test_new_draft_gets_a_fresh_id_and_public_key_each_time():
+    a = PostDraft.new("hello", [make_image()], NOW)
+    b = PostDraft.new("hello", [make_image()], NOW)
+
+    assert a.id != b.id
+    assert a.public_key != b.public_key
+    assert a.status == DraftStatus.DRAFT
+    assert a.created_at == NOW
+    assert a.post_id is None
+    assert a.published_at is None
+
+
+def test_public_media_url_carries_the_draft_id_index_and_key():
+    draft = PostDraft.new("hello", [make_image()], NOW)
+
+    url = draft.public_media_url("https://example.com", 2)
+
+    assert url == f"https://example.com/media/drafts/{draft.id}/2?key={draft.public_key}"
+
+
+def test_public_media_url_strips_a_trailing_slash_from_the_base():
+    draft = PostDraft.new("hello", [make_image()], NOW)
+
+    assert draft.public_media_url("https://example.com/", 0) == (
+        f"https://example.com/media/drafts/{draft.id}/0?key={draft.public_key}"
+    )
+
+
+def test_mark_published_sets_the_post_id_time_and_clears_any_error():
+    draft = PostDraft.new("hello", [make_image()], NOW)
+    draft.mark_failed("boom")
+
+    draft.mark_published("p1", NOW)
+
+    assert draft.status == DraftStatus.PUBLISHED
+    assert draft.post_id == "p1"
+    assert draft.published_at == NOW
+    assert draft.error is None
+
+
+def test_mark_failed_sets_the_status_and_truncates_a_long_error():
+    draft = PostDraft.new("hello", [make_image()], NOW)
+
+    draft.mark_failed("x" * 5000)
+
+    assert draft.status == DraftStatus.FAILED
+    assert draft.error is not None
+    assert len(draft.error) == Delivery.MAX_ERROR_LENGTH

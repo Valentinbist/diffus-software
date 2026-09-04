@@ -18,9 +18,11 @@ from typing import Protocol, Self
 from diffus.crossposting.domain.entities import (
     Delivery,
     Destination,
+    DraftImage,
     LinkedEvent,
     MediaFile,
     Post,
+    PostDraft,
     Preview,
     Token,
 )
@@ -103,11 +105,52 @@ class EventDirectory(Protocol):
     async def for_posts(self, post_ids: Sequence[str]) -> dict[str, list[LinkedEvent]]: ...
 
 
+class ImageProcessor(Protocol):
+    def normalise(self, data: bytes) -> DraftImage:
+        """Decode, orient, crop, re-encode one upload. Sync/CPU-bound; raises InvalidImageError."""
+        ...
+
+
+class DraftRepository(Protocol):
+    async def add(self, draft: PostDraft) -> None:
+        """Insert the draft row and one row per image. Only ever called once per draft."""
+        ...
+
+    async def update(self, draft: PostDraft) -> None:
+        """Persist status/error/post_id/published_at. Images are immutable after add()."""
+        ...
+
+    async def get(self, draft_id: str) -> PostDraft | None:
+        """The draft with its images, ordered by index."""
+        ...
+
+    async def get_image(self, draft_id: str, index: int) -> DraftImage | None: ...
+
+    async def public_key(self, draft_id: str) -> str | None:
+        """Just the key column, for the unauthenticated media route."""
+        ...
+
+    async def delete(self, draft_id: str) -> None: ...
+
+
+class MediaPublisher(Protocol):
+    """Publishes a draft's images to a source and reads the resulting post back."""
+
+    source: str
+
+    async def publish_images(self, token: Token, image_urls: Sequence[str], caption: str) -> str:
+        """Creates a (carousel) container, waits for it, publishes it. Returns the media id."""
+        ...
+
+    async def fetch_post(self, token: Token, post_id: str) -> Post: ...
+
+
 class UnitOfWork(Protocol):
     posts: PostRepository
     deliveries: DeliveryRepository
     previews: PreviewRepository
     tokens: TokenRepository
+    drafts: DraftRepository
 
     async def __aenter__(self) -> Self: ...
 

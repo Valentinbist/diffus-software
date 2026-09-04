@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% set active_page = "calendar" %}
+
+{% block title %}Vorschau – Kalender{% endblock %}
+
+{% block content %}
+{% set ev = preview.view.event %}
+
+<p class="meta kicker"><a class="plain back" href="/calendar/events/{{ ev.id }}/compose">« Zurück</a></p>
+<h1 class="h1">Vorschau</h1>
+
+<div class="gallery{% if preview.draft.image_urls|length == 1 %} single{% endif %}">
+  {% for url in preview.draft.image_urls %}
+  <figure class="media"><img src="{{ url }}" alt=""></figure>
+  {% endfor %}
+</div>
+
+<p class="body caption">{{ preview.draft.caption }}</p>
+
+<section class="details">
+  <p class="eyebrow">Ziele</p>
+  <p class="meta tags">
+    {% if instagram %}<span>Instagram</span>{% endif %}
+    {% for t in preview.options.targets if t.address in telegram %}<span>{{ t.label }}</span>{% endfor %}
+  </p>
+</section>
+
+{% if error %}
+<div class="notice"><p class="body">{{ error }}</p></div>
+{% endif %}
+
+<div class="actions">
+  <form method="post" action="/calendar/events/{{ ev.id }}/compose/{{ preview.draft.id }}/publish">
+    {% if instagram %}<input type="hidden" name="instagram" value="true">{% endif %}
+    {% for t in telegram %}<input type="hidden" name="telegram" value="{{ t }}">{% endfor %}
+    <button type="submit" class="btn btn-solid">Veröffentlichen</button>
+  </form>
+  <form method="post" action="/calendar/events/{{ ev.id }}/compose/{{ preview.draft.id }}/discard">
+    <button type="submit" class="btn">Verwerfen</button>
+  </form>
+</div>
+{% endblock %}

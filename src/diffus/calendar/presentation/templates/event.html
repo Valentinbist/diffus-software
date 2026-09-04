@@ -13,6 +13,12 @@
   {% for sc in detail.view.sub_calendars %}<span><span class="dot" style="background:{{ sc.color }}"></span>{{ sc.name }}</span>{% endfor %}
 </p>
 
+{% if published %}
+<div class="notice">
+  <p class="body">Veröffentlicht. <a href="/posts/{{ published }}">Zum Post</a></p>
+</div>
+{% endif %}
+
 {% if ev.removed %}
 <div class="notice">
   <p class="body">Dieser Termin wurde im Kalender gelöscht. Die Verknüpfungen bleiben erhalten.</p>
@@ -42,6 +48,9 @@
   {% else %}
   <p class="meta">Noch kein Post verknüpft.</p>
   {% endfor %}
+  <div class="actions">
+    <a class="btn btn-solid" href="/calendar/events/{{ ev.id }}/compose" data-modal>Post erstellen</a>
+  </div>
 </section>
 
 <section class="details">

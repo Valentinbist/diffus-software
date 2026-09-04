@@ -26,13 +26,14 @@ templates = build_templates(ZoneInfo("Europe/Berlin"))
 NOW = datetime(2026, 9, 3, 10, 0, tzinfo=UTC)  # 12:00 in Berlin
 
 
-def make_token(days_left: int = 40) -> Token:
+def make_token(days_left: int = 40, can_publish: bool = True) -> Token:
     return Token(
         source="instagram",
         access_token=AccessToken("t"),
         external_user_id="1",
         expires_at=NOW + timedelta(days=days_left),
         refreshed_at=NOW,
+        scopes=Token.PUBLISH_SCOPE if can_publish else "",
     )
 
 
@@ -101,6 +102,13 @@ def test_connected_shows_the_last_sync_and_a_sync_button():
     assert "Läuft. Letzter Abgleich vor 4 Minuten." in html
     assert "Jetzt abgleichen" in html
     assert "Neu verbinden" not in html
+
+
+def test_connected_without_publish_scope_shows_the_reconnect_hint():
+    html = render_index(Overview(token=make_token(can_publish=False), posts=[]))
+
+    assert "Instagram neu verbinden, um Veröffentlichen freizuschalten." in html
+    assert "Neu verbinden" in html
 
 
 def test_failed_sync_and_expiring_token_are_called_out():

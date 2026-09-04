@@ -20,13 +20,23 @@ from diffus.crossposting.domain.entities import (
     Delivery,
     DeliveryStatus,
     Destination,
+    DraftImage,
+    DraftStatus,
     MediaItem,
     MediaType,
     Post,
+    PostDraft,
     Preview,
     Token,
 )
-from diffus.crossposting.infrastructure.db.models import DeliveryRow, PostRow, PreviewRow, TokenRow
+from diffus.crossposting.infrastructure.db.models import (
+    DeliveryRow,
+    PostDraftMediaRow,
+    PostDraftRow,
+    PostRow,
+    PreviewRow,
+    TokenRow,
+)
 
 
 def _post_to_row(post: Post) -> dict:
@@ -90,6 +100,51 @@ def _row_to_token(row: TokenRow) -> Token:
         external_user_id=row.external_user_id,
         expires_at=row.expires_at,
         refreshed_at=row.refreshed_at,
+        scopes=row.scopes or "",
+    )
+
+
+def _draft_to_row(draft: PostDraft) -> PostDraftRow:
+    return PostDraftRow(
+        id=draft.id,
+        caption=draft.caption,
+        public_key=draft.public_key,
+        status=draft.status.value,
+        error=draft.error,
+        post_id=draft.post_id,
+        created_at=draft.created_at,
+        published_at=draft.published_at,
+    )
+
+
+def _row_to_draft(row: PostDraftRow, images: Sequence[DraftImage]) -> PostDraft:
+    return PostDraft(
+        id=row.id,
+        caption=row.caption,
+        public_key=row.public_key,
+        images=tuple(images),
+        created_at=row.created_at,
+        status=DraftStatus(row.status),
+        error=row.error,
+        post_id=row.post_id,
+        published_at=row.published_at,
+    )
+
+
+def _image_to_row(draft_id: str, index: int, image: DraftImage) -> PostDraftMediaRow:
+    return PostDraftMediaRow(
+        draft_id=draft_id,
+        media_index=index,
+        content_type=image.content_type,
+        width=image.width,
+        height=image.height,
+        data=image.data,
+    )
+
+
+def _row_to_image(row: PostDraftMediaRow) -> DraftImage:
+    return DraftImage(
+        content_type=row.content_type, width=row.width, height=row.height, data=row.data
     )
 
 
@@ -225,5 +280,52 @@ class SqlTokenRepository:
                 external_user_id=token.external_user_id,
                 expires_at=token.expires_at,
                 refreshed_at=token.refreshed_at,
+                scopes=token.scopes,
             )
         )
+
+
+class SqlDraftRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def add(self, draft: PostDraft) -> None:
+        self._s.add(_draft_to_row(draft))
+        for index, image in enumerate(draft.images):
+            self._s.add(_image_to_row(draft.id, index, image))
+
+    async def update(self, draft: PostDraft) -> None:
+        row = await self._s.get(PostDraftRow, draft.id)
+        if row is None:
+            return
+        row.status = draft.status.value
+        row.error = draft.error
+        row.post_id = draft.post_id
+        row.published_at = draft.published_at
+
+    async def get(self, draft_id: str) -> PostDraft | None:
+        row = await self._s.get(PostDraftRow, draft_id)
+        if row is None:
+            return None
+        result = await self._s.execute(
+            select(PostDraftMediaRow)
+            .where(PostDraftMediaRow.draft_id == draft_id)
+            .order_by(PostDraftMediaRow.media_index)
+        )
+        images = [_row_to_image(r) for r in result.scalars().all()]
+        return _row_to_draft(row, images)
+
+    async def get_image(self, draft_id: str, index: int) -> DraftImage | None:
+        row = await self._s.get(PostDraftMediaRow, (draft_id, index))
+        return _row_to_image(row) if row is not None else None
+
+    async def public_key(self, draft_id: str) -> str | None:
+        result = await self._s.execute(
+            select(PostDraftRow.public_key).where(PostDraftRow.id == draft_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def delete(self, draft_id: str) -> None:
+        row = await self._s.get(PostDraftRow, draft_id)
+        if row is not None:
+            await self._s.delete(row)  # ON DELETE CASCADE removes post_draft_media rows

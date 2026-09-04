@@ -10,17 +10,23 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import httpx
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
 from diffus.calendar.application.calendar_events import GetCalendarEvents
+from diffus.calendar.application.compose_post import ComposePostForEvent
+from diffus.calendar.application.create_event import CreateEventForPost
 from diffus.calendar.application.event_detail import GetEventDetail
 from diffus.calendar.application.link_event_post import LinkEventPost
 from diffus.calendar.application.link_picker import GetLinkPicker
 from diffus.calendar.application.linked_events import GetLinkedEvents
 from diffus.calendar.application.sync_calendar import SyncCalendar
 from diffus.calendar.application.sync_job import CalendarSyncJob
-from diffus.calendar.infrastructure.crossposting import CrosspostingPostCatalog
+from diffus.calendar.infrastructure.crossposting import (
+    CrosspostingPostCatalog,
+    CrosspostingPublisher,
+)
 from diffus.calendar.infrastructure.db.uow import SqlCalendarUnitOfWork
 from diffus.calendar.infrastructure.kalender_digital import KalenderDigitalClient
 from diffus.calendar.presentation.routes import build_templates as build_calendar_templates
@@ -28,9 +34,17 @@ from diffus.calendar.presentation.routes import router as calendar_router
 from diffus.calendar.presentation.services import CalendarServices
 from diffus.crossposting.application.connect_instagram import ConnectInstagram
 from diffus.crossposting.application.deliver import DeliverPost
+from diffus.crossposting.application.drafts import (
+    CreateDraft,
+    DiscardDraft,
+    GetDraft,
+    GetDraftImage,
+)
 from diffus.crossposting.application.overview import GetOverview, NoEvents
 from diffus.crossposting.application.post_detail import GetPostDetail
 from diffus.crossposting.application.preview import GetPreview
+from diffus.crossposting.application.publish_draft import PublishDraft
+from diffus.crossposting.application.publish_readiness import GetPublishReadiness
 from diffus.crossposting.application.refresh_token import EnsureFreshToken
 from diffus.crossposting.application.resend_delivery import ResendDelivery
 from diffus.crossposting.application.sync_job import SyncJob
@@ -41,8 +55,9 @@ from diffus.crossposting.infrastructure.calendar import CalendarEventDirectory
 from diffus.crossposting.infrastructure.db.uow import SqlUnitOfWork
 from diffus.crossposting.infrastructure.instagram.client import InstagramClient
 from diffus.crossposting.infrastructure.media.downloader import HttpMediaGateway
+from diffus.crossposting.infrastructure.media.images import PillowImageProcessor
 from diffus.crossposting.infrastructure.telegram.sink import TelegramSink
-from diffus.crossposting.presentation.routes import build_templates, router
+from diffus.crossposting.presentation.routes import ServicesDep, build_templates, router
 from diffus.crossposting.presentation.services import Services
 from diffus.shared.config import get_settings
 from diffus.shared.db.session import make_engine, make_session_factory
@@ -56,13 +71,31 @@ logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "shared" / "presentation" / "static"
 
 # Unauthenticated on purpose: container and uptime probes can't carry Basic auth
-# credentials. It reports liveness only — never connection or delivery state.
-health_router = APIRouter()
+# credentials, and neither can Instagram fetching a draft's images at publish
+# time — see draft_public_media below.
+public_router = APIRouter()
 
 
-@health_router.get("/healthz")
+@public_router.get("/healthz")
 async def healthz():
     return {"status": "ok"}
+
+
+@public_router.get("/media/drafts/{draft_id}/{index}")
+async def draft_public_media(draft_id: str, index: int, services: ServicesDep, key: str = ""):
+    """What Instagram's `/media` endpoint fetches `image_url` from — see PostDraft.public_media_url.
+
+    `key` must match the draft's own public_key (constant-time compare, done
+    by GetDraftImage) or this 404s exactly like a missing draft/index would.
+    """
+    image = await services.draft_image.run(draft_id, index, key=key)
+    if image is None:
+        raise HTTPException(status_code=404, detail="no such draft image")
+    return Response(
+        content=image.data,
+        media_type=image.content_type,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @asynccontextmanager
@@ -118,6 +151,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     overview = GetOverview(uow=uow, source=instagram.source, events=events)
     detail = GetPostDetail(uow=uow, events=events)
 
+    publish_draft = PublishDraft(
+        uow=uow,
+        publisher=instagram,
+        sinks=sinks,
+        destinations=destinations,
+        public_base_url=settings.public_base_url,
+        # Shares SyncJob's own lock: publishing and the poller must never run
+        # at the same time (see PublishDraft's module docstring).
+        lock=job.lock,
+    )
+
+    create_draft = CreateDraft(uow=uow, images=PillowImageProcessor())
+    discard_draft = DiscardDraft(uow=uow)
+    get_draft = GetDraft(uow=uow)
+    readiness = GetPublishReadiness(
+        uow=uow, source=instagram.source, public_base_url=settings.public_base_url
+    )
+
     app.state.services = Services(
         sync_job=job,
         connect=ConnectInstagram(auth=instagram, uow=uow),
@@ -127,6 +178,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         preview=GetPreview(uow=uow),
         destinations=destinations,
         templates=build_templates(tz, calendar_enabled=settings.calendar_enabled),
+        create_draft=create_draft,
+        publish_draft=publish_draft,
+        discard_draft=discard_draft,
+        get_draft=get_draft,
+        draft_image=GetDraftImage(uow=uow),
+        readiness=readiness,
     )
 
     calendar_services: CalendarServices | None = None
@@ -144,14 +201,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             future_months=settings.calendar_future_months,
         )
         # Same exception, the other way round: the calendar's own adapter
-        # over crossposting's read use cases.
+        # over crossposting's read use cases — and, for CrosspostingPublisher,
+        # crossposting's drafting/publishing *commands* too (see
+        # docs/architecture.md, Bounded contexts).
         catalog = CrosspostingPostCatalog(overview=overview, detail=detail)
+        publisher = CrosspostingPublisher(
+            create=create_draft,
+            publish_draft=publish_draft,
+            readiness=readiness,
+            drafts=get_draft,
+            discard_draft=discard_draft,
+            destinations=destinations,
+        )
         calendar_services = CalendarServices(
             sync_job=CalendarSyncJob(sync_calendar),
             calendar=GetCalendarEvents(uow=calendar_uow, posts=catalog, tz=tz),
             event_detail=GetEventDetail(uow=calendar_uow, posts=catalog, tz=tz),
             link_post=LinkEventPost(uow=calendar_uow, posts=catalog),
             link_picker=GetLinkPicker(uow=calendar_uow, posts=catalog, tz=tz),
+            compose=ComposePostForEvent(
+                uow=calendar_uow, publisher=publisher, posts=catalog, tz=tz
+            ),
+            create_event=CreateEventForPost(
+                uow=calendar_uow, posts=catalog, calendar=calendar_gateway, tz=tz
+            ),
             tz=tz,
             templates=build_calendar_templates(tz, calendar_enabled=True),
         )
@@ -186,7 +259,7 @@ def create_app(
         app.state.calendar = calendar
     else:
         app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
-    app.include_router(health_router)
+    app.include_router(public_router)
     app.include_router(router)
     # Always mounted: get_calendar_services (its Depends) 404s when the
     # context is off, so the route table doesn't change with the feature flag.

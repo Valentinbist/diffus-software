@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
 
+from diffus.calendar.domain.entities import NewEvent
+from diffus.calendar.domain.errors import CalendarError
 from diffus.calendar.infrastructure.kalender_digital import KalenderDigitalClient
 
 TZ = ZoneInfo("Europe/Berlin")
+TOKEN = "03e3bc8e2be173ff9c8b"
 
 CALENDAR = {
     "id": 48963,
@@ -300,3 +304,97 @@ async def test_fetch_raises_on_a_server_error_from_the_event_endpoint():
 
     with pytest.raises(httpx.HTTPStatusError):
         await client.fetch(date(2026, 6, 1), date(2027, 3, 31))
+
+
+# -- create_event() against a mocked transport -----------------------------
+
+
+def make_new_event(
+    starts_at: datetime = datetime(2026, 9, 12, 16, 0, tzinfo=UTC),  # 18:00 CEST
+    ends_at: datetime = datetime(2026, 9, 12, 20, 0, tzinfo=UTC),  # 22:00 CEST
+    whole_day: bool = False,
+) -> NewEvent:
+    return NewEvent(
+        title="Fest",
+        description="Text",
+        who="Jona",
+        location="Ort",
+        starts_at=starts_at,
+        ends_at=ends_at,
+        whole_day=whole_day,
+        sub_calendar_ids=frozenset({5298948, 472104}),
+    )
+
+
+async def test_create_event_posts_the_expected_body_and_parses_the_follow_up_get():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "POST":
+            return httpx.Response(200, json={"eventId": 999})
+        return httpx.Response(200, json=EVENTS[0] | {"id": 999})  # a dict, not a list
+
+    client = make_client(handler)
+
+    event = await client.create_event(make_new_event())
+
+    assert len(requests) == 2
+    post_req, get_req = requests
+    body = json.loads(post_req.content)
+    assert body == {
+        "event": {
+            "start_date": "2026-09-12 18:00:00",
+            "end_date": "2026-09-12 22:00:00",
+            "title": "Fest",
+            "text": "Text",
+            "who": "Jona",
+            "where": "Ort",
+            "subCalendars": [472104, 5298948],
+            "wholeDay": False,
+            "repeatInterval": 0,
+        },
+        "capabilityId": TOKEN,
+        "seriesEdit": None,
+    }
+    assert post_req.url.params["timeZone"] == "Europe/Berlin"
+    assert get_req.url.path == "/event/999"
+    assert get_req.url.params["capabilityId"] == TOKEN
+    assert event.id == "999"
+
+
+async def test_create_event_whole_day_sends_the_last_days_23_59_59():
+    posted: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            posted.append(request)
+            return httpx.Response(200, json={"eventId": 1000})
+        return httpx.Response(200, json=EVENTS[0] | {"id": 1000})
+
+    client = make_client(handler)
+    draft = make_new_event(
+        whole_day=True,
+        starts_at=datetime(2026, 8, 27, 22, 0, tzinfo=UTC),  # local midnight, 28. August
+        ends_at=datetime(2026, 8, 30, 22, 0, tzinfo=UTC),  # local midnight, 31. August (exclusive)
+    )
+
+    await client.create_event(draft)
+
+    body = json.loads(posted[0].content)
+    assert body["event"]["start_date"] == "2026-08-28 00:00:00"
+    assert body["event"]["end_date"] == "2026-08-30 23:59:59"
+
+
+async def test_create_event_raises_calendar_error_without_the_token_when_the_get_fails():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(200, json={"eventId": 999})
+        return httpx.Response(500, text="boom")
+
+    client = make_client(handler)
+
+    with pytest.raises(CalendarError) as exc_info:
+        await client.create_event(make_new_event())
+
+    assert TOKEN not in str(exc_info.value)

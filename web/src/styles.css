@@ -99,10 +99,6 @@ a:hover, a:focus { color: var(--text-muted); }
 }
 .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
 
-/* Cross-context nav: Posts / Kalender, current page in body colour */
-.nav { display: flex; gap: 18px; margin-bottom: 28px; font-size: var(--font-size-xs); color: var(--text-muted); }
-.nav .current { color: var(--text-body); }
-
 /* Coloured dot: the sub-calendar's own colour, the one data-driven colour in the system */
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: var(--radius-button); vertical-align: middle; margin-right: 6px; }
 .tags { display: flex; flex-wrap: wrap; gap: 4px 14px; }
@@ -253,3 +249,16 @@ main { padding: 40px var(--space-horizontal) 40px; }
 #modal::backdrop { background: rgba(0, 0, 0, .7); }
 .modal-inner { padding: 18px var(--space-horizontal) 32px; }
 #modal .back { display: none; }
+
+/* -- Round 2: compose wizards ---------------------------------------------- */
+
+.stack > * + * { margin-top: 14px; }
+textarea, input[type="text"], input[type="date"], input[type="time"] {
+  box-sizing: border-box;
+  width: 100%;
+  background: var(--surface-page);
+  color: var(--text-body);
+  border: 1px solid var(--border-default);
+  padding: 8px 10px;
+  font: inherit;
+}

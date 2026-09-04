@@ -26,8 +26,19 @@ context.
      editor-level — anyone holding it can edit or delete the whole calendar —
      so treat it like a password. Leave it empty to run without the calendar
      feature; nothing calendar-related is synced, shown, or routable.
-2. `docker compose up --build` (the dev stack: hot-reloading app + Postgres;
-   the image that ships is the `runtime` stage of the same Dockerfile)
+   - Set `PUBLIC_BASE_URL` to where this app is itself publicly reachable
+     (`https://your.host` in production). Instagram fetches a compose
+     wizard's images itself from `PUBLIC_BASE_URL/media/drafts/...` at
+     publish time, so it has to be a real public HTTPS URL — Instagram
+     cannot reach `http://localhost`. Telegram-only publishing works fine
+     locally with the default `http://localhost:8000`; see "Testing
+     Instagram publishing locally" below for a tunnel that lifts that limit
+     for a dev box too.
+2. `docker compose up --build` (the dev stack: hot-reloading app + Postgres,
+   plus a `web` service that runs `npm ci && npm run watch` into a shared
+   volume so the frontend's Vite/TypeScript/htmx build stays current as you
+   edit `web/src/`; the image that ships is the `runtime` stage of the same
+   Dockerfile, which bakes a production build of `web/` in at image-build time)
 3. Open `http://localhost:8000` (behind Basic auth) and click **Instagram
    verbinden** to complete the OAuth flow. The UI is in German, like the
    diffus.space site it belongs to, and has a **Kalender** page alongside
@@ -36,6 +47,30 @@ context.
 The first sync after connecting only marks existing posts as seen — it never
 blasts your entire history into Telegram. New posts found on later polls are
 delivered normally.
+
+**After any deploy that changes the Instagram OAuth scope** (e.g. this
+round's addition of the publish scope, `instagram_business_content_publish`)
+click **Instagram verbinden** again once — a token connected under the old,
+narrower scope keeps working for reading, but the compose wizard shows
+"Instagram neu verbinden, um Veröffentlichen freizuschalten." until you do.
+
+## The two wizards
+
+Once the calendar is on, two small wizards connect the calendar and the
+Instagram/Telegram feed:
+
+- **Post erstellen**, from an event's page: prefills a caption from the
+  event (date, time, room, description), takes up to 10 images, and
+  publishes to Instagram and/or Telegram — a Telegram-only post becomes a
+  first-class `diffus:<draft id>` post in the feed, exactly like an
+  Instagram one.
+- **Termin anlegen**, from a post's page: prefills a title (the caption's
+  first line) and a date (a mention like "12.9." in the caption, or the
+  posted day otherwise), and writes a new event straight into
+  kalender.digital, linked back to the post.
+
+Both are ordinary pages (`/calendar/events/{id}/compose`,
+`/calendar/events/new?post={id}`) that also open as a modal on desktop.
 
 ## Dev setup
 
@@ -47,6 +82,38 @@ uv run pytest      # tests run against in-memory fakes (no DB, no network)
 uv run ruff check .
 uv run ty check
 ```
+
+The frontend (Vite + TypeScript + htmx, `web/`) is a separate build step —
+`uv run` alone never touches it:
+
+```sh
+cd web && npm install
+npm run check       # tsc --noEmit
+npm run build       # builds into ../src/diffus/shared/presentation/static/dist
+npm run watch       # same, but rebuilds on every save
+```
+
+Without a build, `shared/presentation/assets.py` logs one warning and falls
+back to unhashed `/static/dist/main.js`/`main.css`, so the app still boots
+and the test suite still runs on a fresh checkout — but the real CSS and the
+desktop modal JS need an actual `npm run build`.
+
+### Testing Instagram publishing locally
+
+Instagram's `/media` endpoint fetches a draft's images itself from
+`PUBLIC_BASE_URL`, and it cannot reach `http://localhost` — so publishing to
+Instagram (not Telegram-only) only works against a real public HTTPS URL. To
+try it from a dev machine, tunnel the local port and point `PUBLIC_BASE_URL`
+at the tunnel instead of restarting anything in production:
+
+```sh
+cloudflared tunnel --url http://localhost:8000
+# then, in .env:
+PUBLIC_BASE_URL=https://<the-hostname-cloudflared-printed>
+```
+
+Telegram-only publishing needs none of this and works against plain
+`http://localhost:8000`.
 
 Or entirely in Docker. `docker-compose.yml` builds the `dev` stage and
 bind-mounts `src/`, so edits reload without a rebuild:
@@ -122,6 +189,7 @@ once by hand in their panel. Everything after that is declarative.
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_IDS` | Telegram bot and target chats |
 | `KALENDER_DIGITAL_TOKEN` | kalender.digital share-link token; leave the secret empty (or unset) to deploy without the calendar feature |
 | `BASIC_AUTH_USERNAME`, `BASIC_AUTH_PASSWORD` | UI credentials |
+| `PUBLIC_BASE_URL` | *Not its own secret* — the pipeline derives it as `https://${APP_DOMAIN}` and writes it to `.env` itself; nothing to add here |
 
 ### Deploying
 
