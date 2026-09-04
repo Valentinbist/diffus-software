@@ -89,6 +89,10 @@ class Destination:
 
 class DeliveryStatus(StrEnum):
     PENDING = "pending"
+    # Freigabe: queued for a human to approve before it is ever sent. Only a
+    # PENDING delivery can be queued, and only a REVIEW one approved/rejected
+    # — see Delivery.queue_for_review/approve/reject.
+    REVIEW = "review"
     SENT = "sent"
     FAILED = "failed"
     SKIPPED = "skipped"
@@ -99,7 +103,13 @@ class Delivery:
     """The state of getting one post to one destination.
 
     Owns the retry policy: a failed delivery is tried again on every sync
-    until MAX_ATTEMPTS; a sent or skipped one is never touched again.
+    until MAX_ATTEMPTS; a sent or skipped one is never touched again. Owns
+    the Freigabe state machine too: PENDING -> REVIEW -> {PENDING, SKIPPED}
+    via queue_for_review/approve/reject — each raises ValueError from any
+    other status, the same way a stray transition would corrupt the retry
+    policy above. can_retry() is deliberately unchanged: a REVIEW row is
+    never FAILED, so it is never retried by the poller (see docs/architecture.md,
+    Sharp edges) until a human approves or rejects it.
     """
 
     MAX_ATTEMPTS: ClassVar[int] = 5
@@ -129,9 +139,30 @@ class Delivery:
         """Seen, deliberately not sent — what the first sync does with existing posts."""
         self.status = DeliveryStatus.SKIPPED
 
+    def queue_for_review(self) -> None:
+        """A fresh delivery to a non-auto channel waits for a human instead of sending."""
+        if self.status != DeliveryStatus.PENDING:
+            raise ValueError(f"cannot queue for review from {self.status}")
+        self.status = DeliveryStatus.REVIEW
+
+    def approve(self) -> None:
+        """A human chose this destination: back to PENDING, so the normal delivery path sends it."""
+        if self.status != DeliveryStatus.REVIEW:
+            raise ValueError(f"cannot approve from {self.status}")
+        self.status = DeliveryStatus.PENDING
+
+    def reject(self) -> None:
+        """A human did not choose this destination: SKIPPED, like the first-sync bootstrap."""
+        if self.status != DeliveryStatus.REVIEW:
+            raise ValueError(f"cannot reject from {self.status}")
+        self.status = DeliveryStatus.SKIPPED
+
 
 class DraftStatus(StrEnum):
     DRAFT = "draft"
+    # Freigabe: submitted with targets chosen, waiting for a human — see
+    # PostDraft.submit_for_review/is_reviewable.
+    REVIEW = "review"
     PUBLISHED = "published"
     FAILED = "failed"
 
@@ -169,19 +200,45 @@ class PostDraft:
     error: str | None = None
     post_id: str | None = None
     published_at: datetime | None = None
+    # What the wizard's targets step chose — set once, either by
+    # submit_for_review() (queued) or by PublishDraft (published/failed
+    # immediately). None only for a draft that never got past the upload step.
+    targets: PublishTargets | None = None
+    # "calendar:<event id>" when this draft was started from an event's "Post
+    # erstellen"; None for a standalone post. Parsed by whoever links the
+    # resulting post back (see PublishDraft, EventDirectory.link).
+    event_ref: str | None = None
 
     @classmethod
-    def new(cls, caption: str, images: Sequence[DraftImage], now: datetime) -> PostDraft:
+    def new(
+        cls,
+        caption: str,
+        images: Sequence[DraftImage],
+        now: datetime,
+        event_ref: str | None = None,
+    ) -> PostDraft:
         return cls(
             id=uuid.uuid4().hex,
             caption=caption,
             public_key=secrets.token_urlsafe(32),
             images=tuple(images),
             created_at=now,
+            event_ref=event_ref,
         )
 
     def public_media_url(self, base_url: str, index: int) -> str:
         return f"{base_url.rstrip('/')}/media/drafts/{self.id}/{index}?key={self.public_key}"
+
+    def submit_for_review(self, targets: PublishTargets) -> None:
+        """Queue this draft for a human to approve, with the targets it will publish to."""
+        if self.status != DraftStatus.DRAFT:
+            raise ValueError(f"cannot submit for review from {self.status}")
+        self.targets = targets
+        self.status = DraftStatus.REVIEW
+
+    def is_reviewable(self) -> bool:
+        """True when the Freigabe page can offer this draft: queued, or a retryable failure."""
+        return self.status in {DraftStatus.REVIEW, DraftStatus.FAILED} and self.targets is not None
 
     def mark_published(self, post_id: str, now: datetime) -> None:
         self.status = DraftStatus.PUBLISHED
@@ -200,6 +257,38 @@ class PublishTargets:
 
     instagram: bool
     destinations: tuple[Destination, ...]
+
+
+# The one Instagram "channel": a single-account app publishes to exactly one
+# place, so this fixed key stands in for both the channel_settings row (the
+# auto-publish switch) and the Delivery recorded for a wizard post that went
+# to Instagram — see publish_draft.py. Fixed rather than keyed by the
+# connected account's external_user_id because the switch must exist (and be
+# toggleable) before any token does.
+INSTAGRAM_CHANNEL = Destination("instagram", "account")
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelPolicy:
+    """One channel's auto-publish setting, as stored in channel_settings."""
+
+    destination: Destination
+    auto_publish: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ComposeHint:
+    """What the calendar offers to prefill the compose wizard for one event.
+
+    Mirrors calendar.domain.entities.ComposeHint the other way round — the
+    same "each context has its own tiny read model of the other's entity"
+    rule LinkedEvent already follows, via EventDirectory.compose_hint.
+    """
+
+    event_id: str
+    title: str
+    caption: str
+    detail_url: str
 
 
 @dataclass(frozen=True, slots=True)

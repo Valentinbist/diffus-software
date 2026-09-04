@@ -6,22 +6,12 @@ from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from diffus.calendar.application.calendar_events import CalendarPage, EventPostStatus, EventView
-from diffus.calendar.application.compose_post import ComposeForm, ComposePrefill, ComposePreview
 from diffus.calendar.application.create_event import EventForm
 from diffus.calendar.application.event_detail import EventDetail, SuggestedPost
 from diffus.calendar.application.link_picker import LinkPicker, LinkPickerEvent
 from diffus.calendar.application.suggest_posts import SuggestionReason
 from diffus.calendar.application.sync_job import CalendarLastRun
-from diffus.calendar.domain.entities import (
-    CalendarEvent,
-    DraftPreview,
-    EventLink,
-    InstagramState,
-    LinkablePost,
-    PublishOptions,
-    SubCalendar,
-    TelegramTarget,
-)
+from diffus.calendar.domain.entities import CalendarEvent, EventLink, LinkablePost, SubCalendar
 from diffus.calendar.presentation import display
 from diffus.calendar.presentation.routes import build_templates
 
@@ -130,6 +120,7 @@ def test_agenda_view_shows_the_day_heading_time_sub_calendar_dot_and_post_status
     # Jinja autoescapes "&" to "&amp;" in attribute values, as valid HTML requires.
     assert 'href="/calendar?view=month&amp;cal=5298948">Monat' in html
     assert "Jetzt abgleichen" in html
+    assert 'href="/calendar/events/new" data-modal>Termin anlegen' in html
 
 
 def test_agenda_status_line_shows_a_redacted_sync_error():
@@ -314,85 +305,6 @@ def test_link_picker_page_shows_suggestions_and_the_upcoming_list():
     assert '<a class="plain back" href="/posts/p1">« Zum Post</a>' in html
 
 
-# -- compose page -------------------------------------------------------------------
-
-
-def make_compose_form(
-    instagram_state: InstagramState = InstagramState.READY, caption: str = "Fest\n📅 Text"
-) -> ComposeForm:
-    event = make_event()
-    view = make_view(event)
-    options = PublishOptions(
-        instagram=instagram_state, targets=(TelegramTarget(address="c1", label="Telegram"),)
-    )
-    return ComposeForm(view=view, prefill=ComposePrefill(caption=caption), options=options)
-
-
-def test_compose_page_shows_the_prefilled_caption_and_the_checked_telegram_target():
-    html = templates.env.get_template("compose.html").render(
-        form=make_compose_form(), error=None, now=NOW
-    )
-
-    assert "Post erstellen" in html
-    assert "Fest\n📅 Text" in html
-    assert 'name="telegram" value="c1" checked' in html
-    assert "disabled" not in html
-
-
-def test_compose_page_disables_instagram_and_shows_the_hint_when_not_connected():
-    html = templates.env.get_template("compose.html").render(
-        form=make_compose_form(instagram_state=InstagramState.NOT_CONNECTED), error=None, now=NOW
-    )
-
-    assert "disabled" in html
-    assert "Instagram ist nicht verbunden." in html
-
-
-def test_compose_page_shows_an_error_notice():
-    html = templates.env.get_template("compose.html").render(
-        form=make_compose_form(), error="Höchstens 10 Bilder und 20 MB pro Post.", now=NOW
-    )
-
-    assert '<div class="notice">' in html
-    assert "Höchstens 10 Bilder" in html
-
-
-# -- compose preview page ------------------------------------------------------------
-
-
-def make_compose_preview(image_urls=("/drafts/d1/media/0", "/drafts/d1/media/1")) -> ComposePreview:
-    event = make_event()
-    view = make_view(event)
-    options = PublishOptions(
-        instagram=InstagramState.READY, targets=(TelegramTarget(address="c1", label="Telegram"),)
-    )
-    draft = DraftPreview(id="d1", caption="Hallo Welt", image_urls=image_urls)
-    return ComposePreview(view=view, draft=draft, options=options)
-
-
-def test_compose_preview_page_shows_the_images_caption_and_hidden_chosen_targets():
-    html = templates.env.get_template("compose_preview.html").render(
-        preview=make_compose_preview(), instagram=False, telegram=["c1"], error=None, now=NOW
-    )
-
-    assert "Vorschau" in html
-    assert 'src="/drafts/d1/media/0"' in html
-    assert 'src="/drafts/d1/media/1"' in html
-    assert "Hallo Welt" in html
-    assert '<input type="hidden" name="telegram" value="c1">' in html
-    assert "Telegram" in html
-
-
-def test_compose_preview_page_shows_an_error_notice():
-    html = templates.env.get_template("compose_preview.html").render(
-        preview=make_compose_preview(), instagram=False, telegram=[], error="Instagram: boom",
-        now=NOW,
-    )
-
-    assert '<div class="notice">' in html
-    assert "Instagram: boom" in html
-
-
 # -- new event page -------------------------------------------------------------------
 
 
@@ -440,3 +352,14 @@ def test_new_event_page_shows_an_error_notice():
 
     assert '<div class="notice">' in html
     assert "Das Ende muss nach dem Beginn liegen." in html
+
+
+def test_new_event_page_without_a_post_omits_the_post_header_and_works_standalone():
+    html = templates.env.get_template("new_event.html").render(
+        post=None, form=make_event_form(), sub_calendars=[SUB_CALENDAR], error=None, now=NOW
+    )
+
+    assert "Termin anlegen" in html
+    assert "« Zum Post" not in html
+    assert 'name="post_id" value=""' in html
+    assert 'href="/calendar">Abbrechen' in html

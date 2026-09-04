@@ -14,8 +14,10 @@
   <header class="topbar"><div class="topbar-inner">
     <a class="brand plain" href="/">diffus.space</a>
     <nav class="nav">
-      <a class="plain{% if active_page == "posts" %} current{% endif %}" href="/">Posts</a>
+      <a class="plain{% if active_page == "posts" %} current{% endif %}" href="/">Social Posts</a>
+      <a class="plain{% if active_page == "review" %} current{% endif %}" href="/freigabe">Freigabe <span hx-get="/freigabe/count" hx-trigger="load" hx-swap="innerHTML"></span></a>
       {% if calendar_enabled %}<a class="plain{% if active_page == "calendar" %} current{% endif %}" href="/calendar">Kalender</a>{% endif %}
+      {% if calendar_enabled %}<a class="plain" href="/calendar/events/new" data-modal>+ Termin</a>{% endif %}
     </nav>
   </div></header>
   <main><div class="page">{% block content %}{% endblock %}</div></main>

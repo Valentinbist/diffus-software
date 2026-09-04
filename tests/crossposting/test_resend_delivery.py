@@ -102,6 +102,21 @@ async def test_resend_bypasses_the_retry_cap():
     assert uow.commits >= 1
 
 
+async def test_resend_refuses_a_delivery_waiting_for_freigabe():
+    resend, uow = make_resend()
+    await uow.posts.upsert(make_post())
+    existing = Delivery(post_id="p1", destination=DEST)
+    existing.queue_for_review()
+    await uow.deliveries.save(existing)
+    await uow.commit()
+
+    with pytest.raises(ConnectorError, match="Wartet auf Freigabe"):
+        await resend.run("p1", DEST)
+
+    row = (await uow.deliveries.for_posts(["p1"]))["p1"][0]
+    assert row.status == DeliveryStatus.REVIEW  # untouched by the refused resend
+
+
 async def test_resend_with_no_prior_delivery_creates_and_commits_one():
     resend, uow = make_resend()
     await uow.posts.upsert(make_post())

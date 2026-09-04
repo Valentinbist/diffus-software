@@ -49,7 +49,7 @@
   <p class="meta">Noch kein Post verknüpft.</p>
   {% endfor %}
   <div class="actions">
-    <a class="btn btn-solid" href="/calendar/events/{{ ev.id }}/compose" data-modal>Post erstellen</a>
+    <a class="btn btn-solid" href="/posts/new?event={{ ev.id }}" data-modal>Post erstellen</a>
   </div>
 </section>
 

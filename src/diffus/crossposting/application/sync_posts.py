@@ -1,4 +1,11 @@
-"""Use case: poll the Instagram source and fan-out new posts to Telegram chats."""
+"""Use case: poll the Instagram source and fan-out new posts to configured channels.
+
+A fresh delivery to a channel whose auto-publish switch is off queues for
+Freigabe instead of sending (Delivery.queue_for_review) — see
+docs/architecture.md and channels.py. A FAILED delivery being retried always
+delivers regardless of the switch: the switch is consulted once, at first
+sight of a (post, destination) pair, not on every retry.
+"""
 
 from __future__ import annotations
 
@@ -21,6 +28,7 @@ class SyncReport:
     sent: int = 0
     failed: int = 0
     skipped: int = 0
+    queued: int = 0
     previews: int = 0
 
 
@@ -40,6 +48,7 @@ class SyncPosts:
                 logger.info("posts table is empty; forcing mark_seen_only for this run")
                 mark_seen_only = True
             token = await uow.tokens.get(self.source.source)
+            auto = await uow.channels.get_all()
         if token is None:
             raise NotConnectedError("Instagram is not connected")
 
@@ -77,6 +86,18 @@ class SyncPosts:
                         await uow.deliveries.save(delivery)
                         await uow.commit()
                     report.skipped += 1
+                    continue
+
+                # Only a fresh claim (never attempted before) consults the
+                # switch; a FAILED retry always delivers — the switch decided
+                # once, when the delivery was first created, not on every
+                # retry (§6a).
+                if delivery.status == DeliveryStatus.PENDING and not auto.get(destination, False):
+                    delivery.queue_for_review()
+                    async with self.uow() as uow:
+                        await uow.deliveries.save(delivery)
+                        await uow.commit()
+                    report.queued += 1
                     continue
 
                 status = await self.deliver.run(post, delivery)

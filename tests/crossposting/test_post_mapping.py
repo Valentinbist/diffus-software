@@ -4,9 +4,20 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from diffus.crossposting.domain.entities import MediaItem, MediaType, Post
+from diffus.crossposting.domain.entities import (
+    Destination,
+    MediaItem,
+    MediaType,
+    Post,
+    PublishTargets,
+)
 from diffus.crossposting.infrastructure.db.models import PostRow
-from diffus.crossposting.infrastructure.db.repositories import _post_to_row, _row_to_post
+from diffus.crossposting.infrastructure.db.repositories import (
+    _json_to_targets,
+    _post_to_row,
+    _row_to_post,
+    _targets_to_json,
+)
 
 POSTED_AT = datetime(2024, 1, 1, 12, tzinfo=UTC)
 
@@ -47,3 +58,23 @@ def test_rows_written_before_thumbnails_were_stored_still_load():
 
     assert post.media[0].thumbnail_url is None
     assert post.cover_url is None  # a video with no still frame has nothing to show
+
+
+# -- PublishTargets <-> JSONB (post_drafts.targets) ---------------------------
+
+
+def test_publish_targets_round_trip_through_json():
+    targets = PublishTargets(
+        instagram=True,
+        destinations=(Destination("telegram", "c1"), Destination("signal", "c2")),
+    )
+
+    data = _targets_to_json(targets)
+
+    assert data == {"instagram": True, "destinations": ["telegram:c1", "signal:c2"]}
+    assert _json_to_targets(data) == targets
+
+
+def test_no_targets_round_trips_through_none():
+    assert _targets_to_json(None) is None
+    assert _json_to_targets(None) is None

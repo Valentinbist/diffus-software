@@ -15,7 +15,7 @@ from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
 from diffus.calendar.application.calendar_events import GetCalendarEvents
-from diffus.calendar.application.compose_post import ComposePostForEvent
+from diffus.calendar.application.compose_post import GetComposeHint
 from diffus.calendar.application.create_event import CreateEventForPost
 from diffus.calendar.application.event_detail import GetEventDetail
 from diffus.calendar.application.link_event_post import LinkEventPost
@@ -23,38 +23,44 @@ from diffus.calendar.application.link_picker import GetLinkPicker
 from diffus.calendar.application.linked_events import GetLinkedEvents
 from diffus.calendar.application.sync_calendar import SyncCalendar
 from diffus.calendar.application.sync_job import CalendarSyncJob
-from diffus.calendar.infrastructure.crossposting import (
-    CrosspostingPostCatalog,
-    CrosspostingPublisher,
-)
+from diffus.calendar.infrastructure.crossposting import CrosspostingPostCatalog
 from diffus.calendar.infrastructure.db.uow import SqlCalendarUnitOfWork
 from diffus.calendar.infrastructure.kalender_digital import KalenderDigitalClient
 from diffus.calendar.presentation.routes import build_templates as build_calendar_templates
 from diffus.calendar.presentation.routes import router as calendar_router
 from diffus.calendar.presentation.services import CalendarServices
+from diffus.crossposting.application.channels import GetChannels, SetAutoPublish
 from diffus.crossposting.application.connect_instagram import ConnectInstagram
 from diffus.crossposting.application.deliver import DeliverPost
 from diffus.crossposting.application.drafts import (
+    ApproveDraft,
     CreateDraft,
     DiscardDraft,
     GetDraft,
     GetDraftImage,
+    SubmitDraft,
 )
 from diffus.crossposting.application.overview import GetOverview, NoEvents
 from diffus.crossposting.application.post_detail import GetPostDetail
 from diffus.crossposting.application.preview import GetPreview
 from diffus.crossposting.application.publish_draft import PublishDraft
-from diffus.crossposting.application.publish_readiness import GetPublishReadiness
 from diffus.crossposting.application.refresh_token import EnsureFreshToken
 from diffus.crossposting.application.resend_delivery import ResendDelivery
+from diffus.crossposting.application.review import (
+    ApprovePostDeliveries,
+    CountReview,
+    GetReviewQueue,
+    RejectPostDeliveries,
+)
 from diffus.crossposting.application.sync_job import SyncJob
 from diffus.crossposting.application.sync_posts import SyncPosts
-from diffus.crossposting.domain.entities import Destination
+from diffus.crossposting.domain.entities import INSTAGRAM_CHANNEL, Destination
 from diffus.crossposting.domain.ports import EventDirectory
 from diffus.crossposting.infrastructure.calendar import CalendarEventDirectory
 from diffus.crossposting.infrastructure.db.uow import SqlUnitOfWork
 from diffus.crossposting.infrastructure.instagram.client import InstagramClient
 from diffus.crossposting.infrastructure.media.downloader import HttpMediaGateway
+from diffus.crossposting.infrastructure.media.fallback import FallbackMediaGateway
 from diffus.crossposting.infrastructure.media.images import PillowImageProcessor
 from diffus.crossposting.infrastructure.telegram.sink import TelegramSink
 from diffus.crossposting.presentation.routes import ServicesDep, build_templates, router
@@ -117,7 +123,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         redirect_uri=settings.ig_redirect_uri,
     )
     telegram = TelegramSink(http, settings.telegram_bot_token)
-    media = HttpMediaGateway(http)
+    # FallbackMediaGateway is THE MediaGateway everywhere a post's media might
+    # need to be re-fetched days after the CDN link went stale — a REVIEW
+    # delivery approved late is the case that motivates it (see
+    # infrastructure/media/fallback.py).
+    media = FallbackMediaGateway(cdn=HttpMediaGateway(http), uow=uow)
     sinks = {"telegram": telegram}
 
     destinations = [Destination("telegram", c) for c in settings.chat_ids]
@@ -146,7 +156,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # The one exception to "contexts never import each other's
         # application layer": a context's adapter may call another context's
         # application read use cases (see docs/architecture.md, Bounded contexts).
-        events = CalendarEventDirectory(linked=GetLinkedEvents(uow=calendar_uow))
+        #
+        # Composition-root cycle: CalendarEventDirectory.link() needs a
+        # LinkEventPost, which needs a PostCatalog built from crossposting's
+        # own overview/detail — but the *real* overview/detail (below) are
+        # built with `events`, i.e. this very directory. Break the cycle with
+        # a second, event-less catalog used only to validate a post id when
+        # linking (LinkEventPost.add never reads an event's own linked
+        # events, so NoEvents costs nothing here); the real catalog built
+        # further down, from the real overview/detail, is what every page
+        # actually uses.
+        link_catalog = CrosspostingPostCatalog(
+            overview=GetOverview(uow=uow, source=instagram.source, events=NoEvents()),
+            detail=GetPostDetail(uow=uow, events=NoEvents()),
+        )
+        events = CalendarEventDirectory(
+            linked=GetLinkedEvents(uow=calendar_uow),
+            hint=GetComposeHint(uow=calendar_uow, tz=tz),
+            link_post=LinkEventPost(uow=calendar_uow, posts=link_catalog),
+        )
 
     overview = GetOverview(uow=uow, source=instagram.source, events=events)
     detail = GetPostDetail(uow=uow, events=events)
@@ -160,14 +188,33 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Shares SyncJob's own lock: publishing and the poller must never run
         # at the same time (see PublishDraft's module docstring).
         lock=job.lock,
+        events=events,
     )
 
     create_draft = CreateDraft(uow=uow, images=PillowImageProcessor())
     discard_draft = DiscardDraft(uow=uow)
     get_draft = GetDraft(uow=uow)
-    readiness = GetPublishReadiness(
-        uow=uow, source=instagram.source, public_base_url=settings.public_base_url
+    channels = GetChannels(
+        uow=uow,
+        source=instagram.source,
+        destinations=destinations,
+        public_base_url=settings.public_base_url,
     )
+    # Every channel the app knows about, so a submitted form with some boxes
+    # left unchecked can write "off" for them too (SetAutoPublish's full-set
+    # semantics — see channels.py).
+    known_channels = [INSTAGRAM_CHANNEL, *destinations]
+    set_auto_publish = SetAutoPublish(uow=uow, channels=known_channels)
+    submit_draft = SubmitDraft(uow=uow, publish=publish_draft, destinations=destinations)
+    approve_draft = ApproveDraft(publish=publish_draft)
+    review_queue = GetReviewQueue(uow=uow, detail=detail, events=events, destinations=destinations)
+    review_count = CountReview(uow=uow)
+    # Shares SyncJob's own lock too: a double-click-safe approve must not run
+    # while the poller is mid-tick either (see review.py's docstring).
+    approve_post = ApprovePostDeliveries(
+        uow=uow, deliver=deliver, destinations=destinations, lock=job.lock
+    )
+    reject_post = RejectPostDeliveries(uow=uow)
 
     app.state.services = Services(
         sync_job=job,
@@ -183,7 +230,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         discard_draft=discard_draft,
         get_draft=get_draft,
         draft_image=GetDraftImage(uow=uow),
-        readiness=readiness,
+        channels=channels,
+        set_auto_publish=set_auto_publish,
+        submit_draft=submit_draft,
+        approve_draft=approve_draft,
+        review_queue=review_queue,
+        review_count=review_count,
+        approve_post=approve_post,
+        reject_post=reject_post,
+        events=events,
     )
 
     calendar_services: CalendarServices | None = None
@@ -201,27 +256,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             future_months=settings.calendar_future_months,
         )
         # Same exception, the other way round: the calendar's own adapter
-        # over crossposting's read use cases — and, for CrosspostingPublisher,
-        # crossposting's drafting/publishing *commands* too (see
-        # docs/architecture.md, Bounded contexts).
+        # over crossposting's read use cases (see docs/architecture.md,
+        # Bounded contexts). This is the *real* catalog (built from the real
+        # overview/detail, with `events` wired in) — not the event-less
+        # `link_catalog` above, which only ever backs
+        # CalendarEventDirectory.link()'s own LinkEventPost.
         catalog = CrosspostingPostCatalog(overview=overview, detail=detail)
-        publisher = CrosspostingPublisher(
-            create=create_draft,
-            publish_draft=publish_draft,
-            readiness=readiness,
-            drafts=get_draft,
-            discard_draft=discard_draft,
-            destinations=destinations,
-        )
         calendar_services = CalendarServices(
             sync_job=CalendarSyncJob(sync_calendar),
             calendar=GetCalendarEvents(uow=calendar_uow, posts=catalog, tz=tz),
             event_detail=GetEventDetail(uow=calendar_uow, posts=catalog, tz=tz),
             link_post=LinkEventPost(uow=calendar_uow, posts=catalog),
             link_picker=GetLinkPicker(uow=calendar_uow, posts=catalog, tz=tz),
-            compose=ComposePostForEvent(
-                uow=calendar_uow, publisher=publisher, posts=catalog, tz=tz
-            ),
             create_event=CreateEventForPost(
                 uow=calendar_uow, posts=catalog, calendar=calendar_gateway, tz=tz
             ),

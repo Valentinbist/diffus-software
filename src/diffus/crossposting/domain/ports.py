@@ -16,6 +16,7 @@ from types import TracebackType
 from typing import Protocol, Self
 
 from diffus.crossposting.domain.entities import (
+    ComposeHint,
     Delivery,
     Destination,
     DraftImage,
@@ -82,6 +83,14 @@ class DeliveryRepository(Protocol):
 
     async def for_posts(self, post_ids: Sequence[str]) -> dict[str, list[Delivery]]: ...
 
+    async def in_review(self) -> dict[str, list[Delivery]]:
+        """Every REVIEW row, grouped by post id — the polled-post half of the Freigabe queue."""
+        ...
+
+    async def count_posts_in_review(self) -> int:
+        """Distinct posts with at least one REVIEW row, for the nav badge."""
+        ...
+
 
 class PreviewRepository(Protocol):
     async def save(self, preview: Preview) -> None: ...
@@ -100,9 +109,17 @@ class TokenRepository(Protocol):
 
 
 class EventDirectory(Protocol):
-    """Read-only window onto the calendar context's events, keyed by post."""
+    """Window onto the calendar context's events, keyed by post — plus the post -> event link."""
 
     async def for_posts(self, post_ids: Sequence[str]) -> dict[str, list[LinkedEvent]]: ...
+
+    async def compose_hint(self, event_id: str) -> ComposeHint | None:
+        """What to prefill the compose wizard with for this event, or None (unknown/off)."""
+        ...
+
+    async def link(self, event_id: str, post_id: str) -> None:
+        """Record that a just-published post belongs to this event."""
+        ...
 
 
 class ImageProcessor(Protocol):
@@ -132,6 +149,22 @@ class DraftRepository(Protocol):
 
     async def delete(self, draft_id: str) -> None: ...
 
+    async def in_review(self) -> list[PostDraft]:
+        """Drafts waiting on the Freigabe page: REVIEW, and FAILED ones offered a retry."""
+        ...
+
+    async def count_in_review(self) -> int:
+        """Same set as in_review(), for the nav badge."""
+        ...
+
+
+class ChannelSettingsRepository(Protocol):
+    """Per-channel auto-publish policy: `channel_settings`, keyed by Destination text form."""
+
+    async def get_all(self) -> dict[Destination, bool]: ...
+
+    async def set(self, destination: Destination, auto_publish: bool) -> None: ...
+
 
 class MediaPublisher(Protocol):
     """Publishes a draft's images to a source and reads the resulting post back."""
@@ -151,6 +184,7 @@ class UnitOfWork(Protocol):
     previews: PreviewRepository
     tokens: TokenRepository
     drafts: DraftRepository
+    channels: ChannelSettingsRepository
 
     async def __aenter__(self) -> Self: ...
 

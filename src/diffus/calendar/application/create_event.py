@@ -63,8 +63,21 @@ class CreateEventForPost:
     default_sub_calendar_ids: frozenset[int] = DEFAULT_SUB_CALENDAR_IDS
 
     async def prefill(
-        self, post_id: str
-    ) -> tuple[LinkablePost, EventPrefill, list[SubCalendar]] | None:
+        self, post_id: str | None
+    ) -> tuple[LinkablePost | None, EventPrefill, list[SubCalendar]] | None:
+        if post_id is None:
+            async with self.uow() as uow:
+                sub_calendars = await uow.sub_calendars.list_all()
+            existing_ids = {sc.id for sc in sub_calendars}
+            default_ids = frozenset(i for i in self.default_sub_calendar_ids if i in existing_ids)
+            prefill = EventPrefill(
+                title="",
+                day=datetime.now(UTC).astimezone(self.tz).date(),
+                description="",
+                sub_calendar_ids=default_ids,
+            )
+            return None, prefill, sub_calendars
+
         found = await self.posts.by_ids([post_id])
         if post_id not in found:
             return None
@@ -91,10 +104,11 @@ class CreateEventForPost:
         )
         return post, prefill, sub_calendars
 
-    async def create(self, post_id: str, form: EventForm) -> CalendarEvent:
-        found = await self.posts.by_ids([post_id])
-        if post_id not in found:
-            raise UnknownPostError(post_id)
+    async def create(self, post_id: str | None, form: EventForm) -> CalendarEvent:
+        if post_id:
+            found = await self.posts.by_ids([post_id])
+            if post_id not in found:
+                raise UnknownPostError(post_id)
 
         if form.whole_day:
             start_local = datetime.combine(form.day, time.min, tzinfo=self.tz)
@@ -119,6 +133,7 @@ class CreateEventForPost:
 
         async with self.uow() as uow:
             await uow.events.upsert_many([event])
-            await uow.event_links.add(event.id, post_id)
+            if post_id:
+                await uow.event_links.add(event.id, post_id)
             await uow.commit()
         return event

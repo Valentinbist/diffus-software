@@ -1,33 +1,16 @@
-"""Unit tests for the event → post compose wizard's use case, on fakes."""
+"""Unit tests for the caption template and compose hint the crossposting wizard prefills with."""
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
-import pytest
-
-from diffus.calendar.application.compose_post import ComposePostForEvent, caption_for_event
-from diffus.calendar.domain.entities import (
-    CalendarEvent,
-    InstagramState,
-    PublishOptions,
-    SubCalendar,
-    TelegramTarget,
-)
-from diffus.calendar.domain.errors import PublishError, UnknownEventError
-from tests.calendar.fakes import (
-    FakeCalendarUnitOfWork,
-    FakeEvents,
-    FakePostCatalog,
-    FakePublisher,
-)
+from diffus.calendar.application.compose_post import GetComposeHint, caption_for_event
+from diffus.calendar.domain.entities import CalendarEvent, SubCalendar
+from tests.calendar.fakes import FakeCalendarUnitOfWork, FakeEvents
 
 TZ = ZoneInfo("Europe/Berlin")
-
-OPTIONS = PublishOptions(
-    instagram=InstagramState.READY, targets=(TelegramTarget(address="c1", label="Telegram"),)
-)
 
 HAUPT_RAUM = SubCalendar(id=1, name="Haupt-Raum", color="#31859B", position=0)
 GARTEN = SubCalendar(id=2, name="Garten", color="#9BBB59", position=1)
@@ -136,112 +119,41 @@ def test_caption_uses_the_events_own_location_instead_of_the_default():
     assert "📍 Café Botanika, Haupt-Raum" in caption
 
 
-# -- ComposePostForEvent ------------------------------------------------------
+# -- GetComposeHint -------------------------------------------------------------
 
 
-def make_compose(
-    uow: FakeCalendarUnitOfWork, publisher: FakePublisher | None = None
-) -> ComposePostForEvent:
-    return ComposePostForEvent(
-        uow=uow,
-        publisher=publisher if publisher is not None else FakePublisher(options=OPTIONS),
-        posts=FakePostCatalog([]),
-        tz=TZ,
-    )
+async def test_compose_hint_returns_the_title_caption_and_detail_url():
+    uow = FakeCalendarUnitOfWork(events=FakeEvents([make_event(title="Fest")]))
+
+    hint = await GetComposeHint(uow=uow, tz=TZ).run("e1")
+
+    assert hint is not None
+    assert hint.event_id == "e1"
+    assert hint.title == "Fest"
+    assert hint.caption.startswith("Fest\n")
+    assert hint.detail_url == "/calendar/events/e1"
 
 
-async def test_prefill_returns_the_view_prefilled_caption_and_publish_options():
-    uow = FakeCalendarUnitOfWork(events=FakeEvents([make_event()]))
-    compose = make_compose(uow)
+async def test_compose_hint_returns_none_for_an_unknown_event():
+    hint = await GetComposeHint(uow=FakeCalendarUnitOfWork(), tz=TZ).run("nope")
 
-    form = await compose.prefill("e1")
-
-    assert form is not None
-    assert form.view.event.id == "e1"
-    assert form.prefill.caption.startswith("Fest\n")
-    assert form.options == OPTIONS
+    assert hint is None
 
 
-async def test_prefill_returns_none_for_an_unknown_event():
-    compose = make_compose(FakeCalendarUnitOfWork())
+async def test_compose_hint_still_returns_a_hint_for_a_removed_event():
+    removed = dataclasses.replace(make_event(title="Fest"), removed_at=datetime.now(UTC))
+    uow = FakeCalendarUnitOfWork(events=FakeEvents([removed]))
 
-    assert await compose.prefill("nope") is None
+    hint = await GetComposeHint(uow=uow, tz=TZ).run("e1")
 
-
-async def test_start_creates_a_draft_via_the_publisher_and_returns_its_id():
-    uow = FakeCalendarUnitOfWork(events=FakeEvents([make_event()]))
-    publisher = FakePublisher(options=OPTIONS)
-    compose = make_compose(uow, publisher)
-
-    draft_id = await compose.start("e1", "Hallo", [("a.png", b"data")])
-
-    assert draft_id == "d1"
-    assert publisher.created == [("Hallo", ["a.png"])]
+    assert hint is not None
+    assert hint.title == "Fest"
 
 
-async def test_start_raises_unknown_event_error_for_a_missing_event():
-    compose = make_compose(FakeCalendarUnitOfWork())
+async def test_compose_hint_uses_ohne_titel_for_an_untitled_event():
+    uow = FakeCalendarUnitOfWork(events=FakeEvents([make_event(title="")]))
 
-    with pytest.raises(UnknownEventError):
-        await compose.start("nope", "Hallo", [])
+    hint = await GetComposeHint(uow=uow, tz=TZ).run("e1")
 
-
-async def test_preview_returns_the_view_and_the_drafts_preview():
-    uow = FakeCalendarUnitOfWork(events=FakeEvents([make_event()]))
-    compose = make_compose(uow)
-
-    preview = await compose.preview("e1", "d1")
-
-    assert preview is not None
-    assert preview.view.event.id == "e1"
-    assert preview.draft.id == "d1"
-    assert preview.options == OPTIONS
-
-
-async def test_preview_returns_none_for_an_unknown_draft():
-    uow = FakeCalendarUnitOfWork(events=FakeEvents([make_event()]))
-    compose = make_compose(uow)
-
-    assert await compose.preview("e1", "no-such-draft") is None
-
-
-async def test_preview_returns_none_for_an_unknown_event():
-    compose = make_compose(FakeCalendarUnitOfWork())
-
-    assert await compose.preview("nope", "d1") is None
-
-
-async def test_publish_links_the_published_post_to_the_event_and_commits_once():
-    uow = FakeCalendarUnitOfWork(events=FakeEvents([make_event()]))
-    publisher = FakePublisher(options=OPTIONS)
-    compose = make_compose(uow, publisher)
-
-    published = await compose.publish("e1", "d1", True, ["c1"])
-
-    assert published.id == "diffus:d1"
-    assert publisher.published == [("d1", True, ["c1"])]
-    assert uow.commits == 1
-    links = await uow.event_links.for_events(["e1"])
-    assert [link.post_id for link in links["e1"]] == ["diffus:d1"]
-
-
-async def test_publish_error_propagates_without_linking_anything():
-    uow = FakeCalendarUnitOfWork(events=FakeEvents([make_event()]))
-    publisher = FakePublisher(options=OPTIONS, fail=PublishError("Instagram: boom"))
-    compose = make_compose(uow, publisher)
-
-    with pytest.raises(PublishError):
-        await compose.publish("e1", "d1", False, [])
-
-    assert uow.commits == 0
-    links = await uow.event_links.for_events(["e1"])
-    assert links == {}
-
-
-async def test_discard_delegates_to_the_publisher():
-    publisher = FakePublisher(options=OPTIONS)
-    compose = make_compose(FakeCalendarUnitOfWork(), publisher)
-
-    await compose.discard("d1")
-
-    assert publisher.discarded == ["d1"]
+    assert hint is not None
+    assert hint.title == "Ohne Titel"

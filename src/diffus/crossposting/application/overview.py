@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from diffus.crossposting.domain.entities import Delivery, LinkedEvent, Post, Token
+from diffus.crossposting.domain.entities import ComposeHint, Delivery, LinkedEvent, Post, Token
 from diffus.crossposting.domain.ports import EventDirectory, UnitOfWorkFactory
 
 
@@ -30,6 +30,12 @@ class NoEvents:
 
     async def for_posts(self, post_ids: Sequence[str]) -> dict[str, list[LinkedEvent]]:
         return {}
+
+    async def compose_hint(self, event_id: str) -> ComposeHint | None:
+        return None
+
+    async def link(self, event_id: str, post_id: str) -> None:
+        pass
 
 
 @dataclass

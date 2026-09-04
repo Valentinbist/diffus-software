@@ -14,6 +14,7 @@ from diffus.crossposting.domain.entities import (
     DraftImage,
     DraftStatus,
     PostDraft,
+    PublishTargets,
     Token,
 )
 
@@ -107,6 +108,67 @@ def test_skip_marks_seen_without_sending():
     d.skip()
     assert d.status == DeliveryStatus.SKIPPED
     assert not d.can_retry()
+
+
+# -- Delivery: Freigabe state machine -----------------------------------------
+
+
+def test_queue_for_review_moves_a_pending_delivery_to_review():
+    d = Delivery(post_id="p1", destination=Destination("telegram", "c1"))
+
+    d.queue_for_review()
+
+    assert d.status == DeliveryStatus.REVIEW
+    assert not d.can_retry()  # REVIEW is never retried by the poller
+
+
+@pytest.mark.parametrize(
+    "status",
+    [DeliveryStatus.REVIEW, DeliveryStatus.SENT, DeliveryStatus.FAILED, DeliveryStatus.SKIPPED],
+)
+def test_queue_for_review_refuses_anything_but_pending(status):
+    d = make_delivery(status)
+
+    with pytest.raises(ValueError, match="cannot queue for review"):
+        d.queue_for_review()
+
+
+def test_approve_moves_a_review_delivery_back_to_pending():
+    d = make_delivery(DeliveryStatus.REVIEW)
+
+    d.approve()
+
+    assert d.status == DeliveryStatus.PENDING
+
+
+@pytest.mark.parametrize(
+    "status",
+    [DeliveryStatus.PENDING, DeliveryStatus.SENT, DeliveryStatus.FAILED, DeliveryStatus.SKIPPED],
+)
+def test_approve_refuses_anything_but_review(status):
+    d = make_delivery(status)
+
+    with pytest.raises(ValueError, match="cannot approve"):
+        d.approve()
+
+
+def test_reject_moves_a_review_delivery_to_skipped():
+    d = make_delivery(DeliveryStatus.REVIEW)
+
+    d.reject()
+
+    assert d.status == DeliveryStatus.SKIPPED
+
+
+@pytest.mark.parametrize(
+    "status",
+    [DeliveryStatus.PENDING, DeliveryStatus.SENT, DeliveryStatus.FAILED, DeliveryStatus.SKIPPED],
+)
+def test_reject_refuses_anything_but_review(status):
+    d = make_delivery(status)
+
+    with pytest.raises(ValueError, match="cannot reject"):
+        d.reject()
 
 
 # -- AccessToken -------------------------------------------------------------
@@ -225,3 +287,65 @@ def test_mark_failed_sets_the_status_and_truncates_a_long_error():
     assert draft.status == DraftStatus.FAILED
     assert draft.error is not None
     assert len(draft.error) == Delivery.MAX_ERROR_LENGTH
+
+
+def test_new_draft_stores_the_optional_event_ref():
+    with_event = PostDraft.new("hello", [make_image()], NOW, event_ref="calendar:e1")
+    without_event = PostDraft.new("hello", [make_image()], NOW)
+
+    assert with_event.event_ref == "calendar:e1"
+    assert without_event.event_ref is None
+
+
+# -- PostDraft: Freigabe state machine -----------------------------------------
+
+TARGETS = PublishTargets(instagram=False, destinations=(Destination("telegram", "c1"),))
+
+
+def test_submit_for_review_stores_targets_and_moves_to_review():
+    draft = PostDraft.new("hello", [make_image()], NOW)
+
+    draft.submit_for_review(TARGETS)
+
+    assert draft.status == DraftStatus.REVIEW
+    assert draft.targets == TARGETS
+
+
+@pytest.mark.parametrize("status", [DraftStatus.REVIEW, DraftStatus.PUBLISHED, DraftStatus.FAILED])
+def test_submit_for_review_refuses_anything_but_draft(status):
+    draft = PostDraft.new("hello", [make_image()], NOW)
+    draft.status = status
+
+    with pytest.raises(ValueError, match="cannot submit for review"):
+        draft.submit_for_review(TARGETS)
+
+
+def test_is_reviewable_is_true_for_review_with_targets():
+    draft = PostDraft.new("hello", [make_image()], NOW)
+    draft.submit_for_review(TARGETS)
+
+    assert draft.is_reviewable()
+
+
+def test_is_reviewable_is_true_for_failed_with_targets():
+    draft = PostDraft.new("hello", [make_image()], NOW)
+    draft.targets = TARGETS
+    draft.mark_failed("boom")
+
+    assert draft.is_reviewable()
+
+
+def test_is_reviewable_is_false_without_targets():
+    draft = PostDraft.new("hello", [make_image()], NOW)
+    draft.status = DraftStatus.FAILED
+
+    assert not draft.is_reviewable()
+
+
+@pytest.mark.parametrize("status", [DraftStatus.DRAFT, DraftStatus.PUBLISHED])
+def test_is_reviewable_is_false_for_draft_and_published_even_with_targets(status):
+    draft = PostDraft.new("hello", [make_image()], NOW)
+    draft.targets = TARGETS
+    draft.status = status
+
+    assert not draft.is_reviewable()

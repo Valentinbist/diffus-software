@@ -14,7 +14,6 @@ from fastapi import HTTPException, Request
 from fastapi.templating import Jinja2Templates
 
 from diffus.calendar.application.calendar_events import GetCalendarEvents
-from diffus.calendar.application.compose_post import ComposePostForEvent
 from diffus.calendar.application.create_event import CreateEventForPost
 from diffus.calendar.application.event_detail import GetEventDetail
 from diffus.calendar.application.link_event_post import LinkEventPost
@@ -29,7 +28,6 @@ class CalendarServices:
     event_detail: GetEventDetail
     link_post: LinkEventPost
     link_picker: GetLinkPicker
-    compose: ComposePostForEvent
     create_event: CreateEventForPost
     tz: ZoneInfo
     templates: Jinja2Templates

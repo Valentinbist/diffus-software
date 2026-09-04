@@ -8,6 +8,7 @@ from diffus.crossposting.application.deliver import DeliverPost
 from diffus.crossposting.application.sync_posts import SyncPosts
 from diffus.crossposting.domain.entities import (
     AccessToken,
+    Delivery,
     DeliveryStatus,
     Destination,
     MediaItem,
@@ -16,7 +17,14 @@ from diffus.crossposting.domain.entities import (
     Token,
 )
 from diffus.crossposting.domain.errors import NotConnectedError
-from tests.crossposting.fakes import FakeMedia, FakeSink, FakeTokens, FakeUnitOfWork, StaticSource
+from tests.crossposting.fakes import (
+    FakeChannels,
+    FakeMedia,
+    FakeSink,
+    FakeTokens,
+    FakeUnitOfWork,
+    StaticSource,
+)
 
 
 def make_post(post_id: str, minute: int = 0, media: tuple[MediaItem, ...] | None = None) -> Post:
@@ -45,8 +53,13 @@ def make_token() -> Token:
 DEFAULT_DESTINATIONS = (Destination("telegram", "chat1"),)
 
 
-def make_sync(source, sink, destinations=DEFAULT_DESTINATIONS, media=None):
-    uow = FakeUnitOfWork(tokens=FakeTokens(make_token()))
+def make_sync(source, sink, destinations=DEFAULT_DESTINATIONS, media=None, auto=None):
+    """`auto` defaults to every destination switched on, so these tests keep exercising
+    delivery mechanics (retries, previews, ...) rather than the Freigabe queue — see the
+    "Freigabe: auto-publish switch" section below for the queueing behaviour itself."""
+    if auto is None:
+        auto = dict.fromkeys(destinations, True)
+    uow = FakeUnitOfWork(tokens=FakeTokens(make_token()), channels=FakeChannels(auto))
     media_gateway = media if media is not None else FakeMedia()
     deliver = DeliverPost(media=media_gateway, sinks={"telegram": sink}, uow=uow)
     sync = SyncPosts(
@@ -229,7 +242,10 @@ async def test_two_sinks_with_the_same_address_get_separate_deliveries():
     telegram_sink = FakeSink()
     signal_sink = FakeSink()
     source = StaticSource([bootstrap_post])
-    uow = FakeUnitOfWork(tokens=FakeTokens(make_token()))
+    destinations = [Destination("telegram", "x"), Destination("signal", "x")]
+    uow = FakeUnitOfWork(
+        tokens=FakeTokens(make_token()), channels=FakeChannels(dict.fromkeys(destinations, True))
+    )
     media = FakeMedia()
     deliver = DeliverPost(
         media=media, sinks={"telegram": telegram_sink, "signal": signal_sink}, uow=uow
@@ -238,7 +254,7 @@ async def test_two_sinks_with_the_same_address_get_separate_deliveries():
         source=source,
         media=media,
         deliver=deliver,
-        destinations=[Destination("telegram", "x"), Destination("signal", "x")],
+        destinations=destinations,
         uow=uow,
     )
 
@@ -261,14 +277,17 @@ async def test_unknown_sink_is_recorded_as_failed_and_does_not_stop_the_loop():
     bootstrap_post = make_post("p1")
     new_post = make_post("p2", minute=1)
     source = StaticSource([bootstrap_post])
-    uow = FakeUnitOfWork(tokens=FakeTokens(make_token()))
+    destinations = [Destination("signal", "x"), Destination("telegram", "y")]
+    uow = FakeUnitOfWork(
+        tokens=FakeTokens(make_token()), channels=FakeChannels(dict.fromkeys(destinations, True))
+    )
     media = FakeMedia()
     deliver = DeliverPost(media=media, sinks={"telegram": FakeSink()}, uow=uow)
     sync = SyncPosts(
         source=source,
         media=media,
         deliver=deliver,
-        destinations=[Destination("signal", "x"), Destination("telegram", "y")],
+        destinations=destinations,
         uow=uow,
     )
 
@@ -285,3 +304,140 @@ async def test_unknown_sink_is_recorded_as_failed_and_does_not_stop_the_loop():
     assert signal_delivery.status == DeliveryStatus.FAILED
     assert signal_delivery.error is not None and "no sink" in signal_delivery.error
     assert by_dest[Destination("telegram", "y")].status == DeliveryStatus.SENT
+
+
+# -- Freigabe: auto-publish switch per channel ---------------------------------
+
+
+async def test_auto_publish_switch_off_queues_for_review_and_never_touches_the_sink():
+    bootstrap_post = make_post("p1")
+    new_post = make_post("p2", minute=1)
+    sink = FakeSink()
+    source = StaticSource([bootstrap_post])
+    sync, uow = make_sync(source, sink, auto={DEFAULT_DESTINATIONS[0]: False})
+
+    await sync.run()  # bootstrap
+    source.posts = [bootstrap_post, new_post]
+    report = await sync.run()
+
+    assert report.queued == 1
+    assert report.sent == 0
+    assert sink.calls == []
+
+    delivs = await uow.deliveries.for_posts(["p2"])
+    assert delivs["p2"][0].status == DeliveryStatus.REVIEW
+
+
+async def test_empty_channel_settings_means_every_channel_queues_for_review():
+    bootstrap_post = make_post("p1")
+    new_post = make_post("p2", minute=1)
+    sink = FakeSink()
+    source = StaticSource([bootstrap_post])
+    sync, uow = make_sync(source, sink, auto={})  # no row for the destination at all
+
+    await sync.run()
+    source.posts = [bootstrap_post, new_post]
+    report = await sync.run()
+
+    assert report.queued == 1
+    assert sink.calls == []
+
+
+async def test_one_channel_auto_and_the_other_not_sends_one_and_queues_the_other():
+    bootstrap_post = make_post("p1")
+    new_post = make_post("p2", minute=1)
+    telegram_sink = FakeSink()
+    signal_sink = FakeSink()
+    c1 = Destination("telegram", "c1")
+    c2 = Destination("signal", "c2")
+    source = StaticSource([bootstrap_post])
+    uow = FakeUnitOfWork(
+        tokens=FakeTokens(make_token()), channels=FakeChannels({c1: True, c2: False})
+    )
+    media = FakeMedia()
+    deliver = DeliverPost(
+        media=media, sinks={"telegram": telegram_sink, "signal": signal_sink}, uow=uow
+    )
+    sync = SyncPosts(
+        source=source, media=media, deliver=deliver, destinations=[c1, c2], uow=uow
+    )
+
+    await sync.run()
+    source.posts = [bootstrap_post, new_post]
+    report = await sync.run()
+
+    assert report.sent == 1
+    assert report.queued == 1
+    assert telegram_sink.calls == [("p2", "c1")]
+    assert signal_sink.calls == []
+
+    delivs = await uow.deliveries.for_posts(["p2"])
+    by_dest = {d.destination: d for d in delivs["p2"]}
+    assert by_dest[c1].status == DeliveryStatus.SENT
+    assert by_dest[c2].status == DeliveryStatus.REVIEW
+
+
+async def test_mark_seen_only_wins_over_the_auto_publish_switch():
+    post = make_post("p1")
+    sink = FakeSink()
+    sync, uow = make_sync(StaticSource([post]), sink)  # bootstrap: mark_seen_only regardless
+
+    report = await sync.run()
+
+    assert report.skipped == 1
+    assert report.queued == 0
+    assert sink.calls == []
+
+
+async def test_a_queued_delivery_is_never_picked_up_again_by_a_later_poll():
+    bootstrap_post = make_post("p1")
+    new_post = make_post("p2", minute=1)
+    sink = FakeSink()
+    source = StaticSource([bootstrap_post])
+    sync, uow = make_sync(source, sink, auto={DEFAULT_DESTINATIONS[0]: False})
+
+    await sync.run()
+    source.posts = [bootstrap_post, new_post]
+    await sync.run()  # queues p2's delivery
+    report = await sync.run()  # nothing left for claim() to hand out
+
+    assert report.queued == 0
+    assert report.sent == 0
+    assert sink.calls == []
+
+
+async def test_a_failed_retry_still_delivers_even_with_the_switch_off():
+    bootstrap_post = make_post("p1")
+    target_post = make_post("p2", minute=1)
+    sink = FakeSink(fail=True)
+    dest = DEFAULT_DESTINATIONS[0]
+    source = StaticSource([bootstrap_post])
+    # The switch was on for the delivery's first (failed) attempt...
+    sync, uow = make_sync(source, sink, auto={dest: True})
+
+    await sync.run()
+    source.posts = [bootstrap_post, target_post]
+    await sync.run()  # first attempt: FAILED, attempts=1
+
+    # ...and is now off; a retry of an already-FAILED row must still deliver.
+    await uow.channels.set(dest, False)
+    await uow.commit()
+    report = await sync.run()
+
+    assert report.failed == 1
+    assert report.queued == 0
+    delivs = await uow.deliveries.for_posts(["p2"])
+    assert delivs["p2"][0].attempts == 2
+
+
+async def test_the_fake_delivery_repositorys_claim_refuses_a_review_row():
+    """Mirrors what the SQL repository test asserts against Postgres (§6a)."""
+    uow = FakeUnitOfWork(channels=FakeChannels({DEFAULT_DESTINATIONS[0]: True}))
+    delivery = Delivery(post_id="p1", destination=DEFAULT_DESTINATIONS[0])
+    delivery.queue_for_review()
+    await uow.deliveries.save(delivery)
+    await uow.commit()
+
+    claimed = await uow.deliveries.claim("p1", DEFAULT_DESTINATIONS[0])
+
+    assert claimed is None

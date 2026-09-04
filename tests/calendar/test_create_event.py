@@ -124,6 +124,23 @@ async def test_prefill_returns_none_for_an_unknown_post():
     assert await use_case.prefill("nope") is None
 
 
+async def test_prefill_without_a_post_id_returns_no_post_and_sane_defaults():
+    uow = FakeCalendarUnitOfWork(sub_calendars=FakeSubCalendars([OEFFENTLICHE]))
+    use_case, _calendar = make_use_case(uow=uow)
+    today_berlin = datetime.now(UTC).astimezone(TZ).date()
+
+    result = await use_case.prefill(None)
+
+    assert result is not None
+    post, prefill, sub_calendars = result
+    assert post is None
+    assert prefill.title == ""
+    assert prefill.description == ""
+    assert prefill.day == today_berlin
+    assert prefill.sub_calendar_ids == frozenset({OEFFENTLICHE.id})
+    assert sub_calendars == [OEFFENTLICHE]
+
+
 # -- create --------------------------------------------------------------------
 
 
@@ -196,3 +213,19 @@ async def test_create_raises_value_error_when_the_end_is_not_after_the_start():
 
     with pytest.raises(ValueError, match="Ende"):
         await use_case.create("p1", form)
+
+
+async def test_create_without_a_post_id_upserts_the_event_and_links_nothing():
+    uow = FakeCalendarUnitOfWork()
+    use_case, calendar = make_use_case(uow=uow)
+    form = make_form()
+
+    event = await use_case.create(None, form)
+
+    assert len(calendar.created) == 1
+    assert event.id == "new-1"
+    stored = await uow.events.get("new-1")
+    assert stored is not None
+    links = await uow.event_links.for_events(["new-1"])
+    assert links == {}
+    assert uow.commits == 1

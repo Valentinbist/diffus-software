@@ -252,6 +252,30 @@ main { padding: 40px var(--space-horizontal) 40px; }
 
 /* -- Round 2: compose wizards ---------------------------------------------- */
 
+/* -- Round 3: Freigabe badge + source pill ---------------------------------- */
+
+.badge {
+  display: inline-block;
+  min-width: 1.4em;
+  padding: 0 6px;
+  margin-left: 4px;
+  border-radius: var(--radius-button);
+  background: var(--diffus-white);
+  color: var(--text-invert);
+  font-size: 12px;
+  line-height: 1.4em;
+  text-align: center;
+}
+.source {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 1px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-button);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .stack > * + * { margin-top: 14px; }
 textarea, input[type="text"], input[type="date"], input[type="time"] {
   box-sizing: border-box;

@@ -1,14 +1,25 @@
 """SQLAlchemy 2.0 declarative models.
 
 Mirrors alembic/versions/0001_initial.py, 0002_previews.py,
-0003_destinations_and_sources.py and 0005_drafts_and_scopes.py exactly.
+0003_destinations_and_sources.py, 0005_drafts_and_scopes.py and
+0006_freigabe_and_channels.py exactly.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, LargeBinary, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -67,10 +78,13 @@ class PreviewRow(Base):
 class DeliveryRow(Base):
     """One post's delivery to one destination.
 
-    Mirrors alembic/versions/0003_destinations_and_sources.py.
+    Mirrors alembic/versions/0003_destinations_and_sources.py; the status
+    index is 0006_freigabe_and_channels.py (the Freigabe queue and its nav
+    badge filter by status on every request).
     """
 
     __tablename__ = "deliveries"
+    __table_args__ = (Index("ix_deliveries_status", "status"),)
 
     post_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("posts.id"), primary_key=True
@@ -103,6 +117,11 @@ class PostDraftRow(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Freigabe (0006_freigabe_and_channels.py): what PublishTargets looked
+    # like at submit time — {"instagram": bool, "destinations": [...]}  —
+    # and "calendar:<event id>" for a draft started from an event.
+    targets: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    event_ref: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
 
 class PostDraftMediaRow(Base):
@@ -118,3 +137,18 @@ class PostDraftMediaRow(Base):
     width: Mapped[int] = mapped_column(Integer, nullable=False)
     height: Mapped[int] = mapped_column(Integer, nullable=False)
     data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+
+
+class ChannelSettingRow(Base):
+    """Per-channel auto-publish switch. Mirrors alembic/versions/0006_freigabe_and_channels.py.
+
+    `destination` is a Destination's text form ("telegram:-100…",
+    "instagram:account"); a missing row means "not auto" — the default is
+    off, not a NULL/False column, so `channel_settings` only ever holds
+    channels someone has actually touched.
+    """
+
+    __tablename__ = "channel_settings"
+
+    destination: Mapped[str] = mapped_column(String(100), primary_key=True)
+    auto_publish: Mapped[bool] = mapped_column(Boolean, nullable=False)

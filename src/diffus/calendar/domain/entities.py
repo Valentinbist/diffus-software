@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
-from enum import StrEnum
 from zoneinfo import ZoneInfo
 
 
@@ -106,46 +105,19 @@ class NewEvent:
     sub_calendar_ids: frozenset[int]
 
 
-# -- Post publishing (compose-a-post wizard) --------------------------------
-#
-# The calendar's own tiny read model of the crossposting context's drafts and
-# publish options, via the PostPublisher port (calendar/infrastructure/crossposting.py
-# is the adapter). Mirrors how LinkablePost is the calendar's view of a Post.
-
-
 @dataclass(frozen=True, slots=True)
-class DraftRef:
-    id: str
+class ComposeHint:
+    """What this calendar offers to prefill the crossposting compose wizard for one event.
 
+    Mirrors crossposting.domain.entities.ComposeHint the other way round —
+    each context keeps its own tiny read model of the other's entity, the
+    same rule LinkablePost already follows for a post. Read by
+    crossposting/infrastructure/calendar.py::CalendarEventDirectory.compose_hint,
+    the one exception (an adapter calling another context's application
+    layer) documented in docs/architecture.md.
+    """
 
-@dataclass(frozen=True, slots=True)
-class DraftPreview:
-    id: str
+    event_id: str
+    title: str
     caption: str
-    image_urls: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class TelegramTarget:
-    address: str
-    label: str
-
-
-class InstagramState(StrEnum):
-    READY = "ready"
-    NOT_CONNECTED = "not_connected"
-    NO_PUBLISH_SCOPE = "no_publish_scope"
-    NO_PUBLIC_URL = "no_public_url"
-
-
-@dataclass(frozen=True, slots=True)
-class PublishOptions:
-    instagram: InstagramState
-    targets: tuple[TelegramTarget, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class PublishedPost:
-    id: str
-    permalink: str
     detail_url: str

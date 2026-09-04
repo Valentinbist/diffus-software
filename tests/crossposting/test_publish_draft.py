@@ -8,9 +8,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from diffus.crossposting.application.deliver import DeliverPost
+from diffus.crossposting.application.overview import NoEvents
 from diffus.crossposting.application.publish_draft import PublishDraft
 from diffus.crossposting.application.sync_posts import SyncPosts
 from diffus.crossposting.domain.entities import (
+    INSTAGRAM_CHANNEL,
     AccessToken,
     DeliveryStatus,
     Destination,
@@ -24,8 +26,10 @@ from diffus.crossposting.domain.entities import (
     Token,
 )
 from diffus.crossposting.domain.errors import DraftError, NotConnectedError
+from diffus.crossposting.domain.ports import EventDirectory
 from tests.crossposting.fakes import (
     FakeDrafts,
+    FakeEventDirectory,
     FakeMedia,
     FakePublisher,
     FakeSink,
@@ -65,6 +69,7 @@ async def seed(
     public_base_url: str = "https://example.com",
     publisher: FakePublisher | None = None,
     sinks: dict[str, FakeSink] | None = None,
+    events: EventDirectory | None = None,
 ) -> tuple[PublishDraft, FakeUnitOfWork, dict[str, FakeSink]]:
     uow = FakeUnitOfWork(tokens=FakeTokens(token), drafts=FakeDrafts())
     if draft is not None:
@@ -78,6 +83,7 @@ async def seed(
         sinks=sinks,
         destinations=list(destinations),
         public_base_url=public_base_url,
+        events=events if events is not None else NoEvents(),
     )
     return publish, uow, sinks
 
@@ -241,3 +247,129 @@ async def test_a_publisher_failure_marks_the_draft_failed_and_writes_no_post():
     assert stored_draft.status == DraftStatus.FAILED
     assert stored_draft.error == "meta is down"
     assert await uow.posts.count() == 0
+
+
+# -- Freigabe: the Instagram delivery record, source, targets, event linking -----
+
+
+def make_instagram_post(post_id: str = "ig-media-1") -> Post:
+    return Post(
+        id=post_id,
+        source="instagram",
+        caption="Siebdruck-Nachmittag",
+        permalink=f"https://instagram.com/p/{post_id}/",
+        media=(MediaItem(url="https://cdn.example.com/1.jpg", type=MediaType.IMAGE),),
+        posted_at=NOW,
+    )
+
+
+async def test_the_instagram_leg_records_a_sent_delivery_to_the_instagram_channel():
+    draft = make_draft(images=1)
+    publisher = FakePublisher(post=make_instagram_post())
+    publish, uow, _sinks = await seed(
+        draft, token=make_token(), publisher=publisher, destinations=()
+    )
+
+    result = await publish.run(draft.id, PublishTargets(instagram=True, destinations=()))
+
+    delivs = await uow.deliveries.for_posts([result.id])
+    by_dest = {d.destination: d for d in delivs[result.id]}
+    assert by_dest[INSTAGRAM_CHANNEL].status == DeliveryStatus.SENT
+    assert by_dest[INSTAGRAM_CHANNEL].sent_at is not None
+
+
+async def test_source_diffus_survives_a_later_poller_upsert_of_the_instagram_post():
+    draft = make_draft(images=1)
+    instagram_post = make_instagram_post()
+    publisher = FakePublisher(post=instagram_post)
+    publish, uow, _sinks = await seed(
+        draft, token=make_token(), publisher=publisher, destinations=()
+    )
+
+    result = await publish.run(draft.id, PublishTargets(instagram=True, destinations=()))
+    assert result.source == "diffus"
+
+    # A later poll fetches the same post from Instagram itself (source="instagram")
+    # and upserts it; on_conflict_do_nothing must leave the stored row untouched.
+    await uow.posts.upsert(instagram_post)
+    await uow.commit()
+
+    stored = await uow.posts.get(result.id)
+    assert stored is not None
+    assert stored.source == "diffus"
+
+
+async def test_run_without_targets_uses_the_drafts_own_stored_targets():
+    draft = make_draft(images=1)
+    draft.status = DraftStatus.FAILED
+    draft.targets = PublishTargets(instagram=False, destinations=(TELEGRAM,))
+    publish, uow, sinks = await seed(draft)
+
+    result = await publish.run(draft.id)  # no targets argument at all
+
+    stored_draft = await uow.drafts.get(draft.id)
+    assert stored_draft is not None
+    assert stored_draft.status == DraftStatus.PUBLISHED
+    assert sinks["telegram"].calls == [(result.id, "chat1")]
+
+
+@pytest.mark.parametrize("status", [DraftStatus.REVIEW, DraftStatus.FAILED])
+async def test_review_and_failed_drafts_can_be_published(status):
+    draft = make_draft(images=1)
+    draft.status = status
+    publish, uow, _sinks = await seed(draft)
+
+    await publish.run(draft.id, PublishTargets(instagram=False, destinations=(TELEGRAM,)))
+
+    stored_draft = await uow.drafts.get(draft.id)
+    assert stored_draft is not None
+    assert stored_draft.status == DraftStatus.PUBLISHED
+
+
+async def test_a_target_destination_not_configured_is_refused():
+    draft = make_draft()
+    publish, _uow, _sinks = await seed(draft, destinations=(TELEGRAM,))
+
+    with pytest.raises(DraftError, match="Unbekanntes Ziel"):
+        await publish.run(draft.id, PublishTargets(instagram=False, destinations=(SIGNAL,)))
+
+
+async def test_publishing_a_draft_started_from_an_event_links_the_post_back():
+    draft = make_draft(images=1)
+    draft.event_ref = "calendar:e1"
+    events = FakeEventDirectory()
+    publish, _uow, _sinks = await seed(draft, events=events)
+
+    result = await publish.run(draft.id, PublishTargets(instagram=False, destinations=(TELEGRAM,)))
+
+    assert events.links == [("e1", result.id)]
+
+
+class _RaisingEventDirectory:
+    """EventDirectory whose link() always fails, the way a calendar outage would."""
+
+    async def for_posts(self, post_ids):
+        return {}
+
+    async def compose_hint(self, event_id):
+        return None
+
+    async def link(self, event_id, post_id):
+        raise RuntimeError("calendar is down")
+
+
+async def test_a_failed_event_link_is_logged_but_the_post_still_publishes(caplog):
+    draft = make_draft(images=1)
+    draft.event_ref = "calendar:e1"
+    publish, uow, _sinks = await seed(draft, events=_RaisingEventDirectory())
+
+    with caplog.at_level("ERROR"):
+        result = await publish.run(
+            draft.id, PublishTargets(instagram=False, destinations=(TELEGRAM,))
+        )
+
+    stored_draft = await uow.drafts.get(draft.id)
+    assert stored_draft is not None
+    assert stored_draft.status == DraftStatus.PUBLISHED
+    assert stored_draft.post_id == result.id
+    assert "failed to link" in caplog.text

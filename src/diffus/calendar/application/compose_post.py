@@ -1,10 +1,10 @@
-"""Use case: the event → post compose wizard.
+"""Caption template and compose hint for the crossposting compose wizard.
 
-Two requests, mirroring the crossposting drafting flow this rides on top of:
-`prefill` shows a caption template + upload form, `start` turns the upload
-into a draft, `preview` shows what will be published, and `publish` hands
-off to the PostPublisher and — the one write this use case itself owns —
-links the resulting post back to the event.
+The event → post compose wizard itself (drafting, previewing, publishing)
+moved into crossposting (`/posts/new`, round 3) — this module now only
+supplies what crossposting needs to prefill it for an event: a caption
+template (`caption_for_event`) and the read-only hint crossposting's
+`EventDirectory.compose_hint` fetches (`GetComposeHint`).
 """
 
 from __future__ import annotations
@@ -14,16 +14,8 @@ from dataclasses import dataclass
 from datetime import date
 from zoneinfo import ZoneInfo
 
-from diffus.calendar.application.calendar_events import EventView, build_event_views
-from diffus.calendar.domain.entities import (
-    CalendarEvent,
-    DraftPreview,
-    PublishedPost,
-    PublishOptions,
-    SubCalendar,
-)
-from diffus.calendar.domain.errors import UnknownEventError
-from diffus.calendar.domain.ports import CalendarUnitOfWorkFactory, PostCatalog, PostPublisher
+from diffus.calendar.domain.entities import CalendarEvent, ComposeHint, SubCalendar
+from diffus.calendar.domain.ports import CalendarUnitOfWorkFactory
 from diffus.shared.dates import MONTHS, WEEKDAYS
 
 LOCATION = "Viktoriastraße 18"
@@ -80,86 +72,26 @@ def caption_for_event(
 
 
 @dataclass
-class ComposePrefill:
-    caption: str
+class GetComposeHint:
+    """What the crossposting compose wizard (`/posts/new?event=<id>`) prefills for an event.
 
+    A removed event can still get a post, so this includes removed events
+    rather than 404ing — the event's own page already shows the "gelöscht"
+    notice.
+    """
 
-@dataclass
-class ComposeForm:
-    view: EventView
-    prefill: ComposePrefill
-    options: PublishOptions
-
-
-@dataclass
-class ComposePreview:
-    view: EventView
-    draft: DraftPreview
-    options: PublishOptions
-
-
-@dataclass
-class ComposePostForEvent:
     uow: CalendarUnitOfWorkFactory
-    publisher: PostPublisher
-    posts: PostCatalog
     tz: ZoneInfo
 
-    async def _view(self, event_id: str) -> EventView | None:
-        async with self.uow() as uow:
-            event = await uow.events.get(event_id)  # removed events can still get a post
-            if event is None:
-                return None
-            sub_calendars = await uow.sub_calendars.list_all()
-            links_by_event = await uow.event_links.for_events([event_id])
-        links = links_by_event.get(event_id, [])
-        posts_by_id = await self.posts.by_ids([link.post_id for link in links])
-        return build_event_views([event], sub_calendars, {event_id: links}, posts_by_id)[0]
-
-    async def prefill(self, event_id: str) -> ComposeForm | None:
+    async def run(self, event_id: str) -> ComposeHint | None:
         async with self.uow() as uow:
             event = await uow.events.get(event_id)
             if event is None:
                 return None
             sub_calendars = await uow.sub_calendars.list_all()
-            links_by_event = await uow.event_links.for_events([event_id])
-        links = links_by_event.get(event_id, [])
-        posts_by_id = await self.posts.by_ids([link.post_id for link in links])
-        view = build_event_views([event], sub_calendars, {event_id: links}, posts_by_id)[0]
-
-        options = await self.publisher.options()
-        caption = caption_for_event(event, sub_calendars, self.tz)
-        return ComposeForm(view=view, prefill=ComposePrefill(caption=caption), options=options)
-
-    async def start(
-        self, event_id: str, caption: str, uploads: Sequence[tuple[str, bytes]]
-    ) -> str:
-        async with self.uow() as uow:
-            event = await uow.events.get(event_id)
-        if event is None:
-            raise UnknownEventError(event_id)
-
-        draft = await self.publisher.create_draft(caption, uploads)
-        return draft.id
-
-    async def preview(self, event_id: str, draft_id: str) -> ComposePreview | None:
-        view = await self._view(event_id)
-        if view is None:
-            return None
-        draft = await self.publisher.get_draft(draft_id)
-        if draft is None:
-            return None
-        options = await self.publisher.options()
-        return ComposePreview(view=view, draft=draft, options=options)
-
-    async def publish(
-        self, event_id: str, draft_id: str, instagram: bool, addresses: Sequence[str]
-    ) -> PublishedPost:
-        published = await self.publisher.publish(draft_id, instagram, addresses)
-        async with self.uow() as uow:
-            await uow.event_links.add(event_id, published.id)
-            await uow.commit()
-        return published
-
-    async def discard(self, draft_id: str) -> None:
-        await self.publisher.discard(draft_id)
+        return ComposeHint(
+            event_id=event_id,
+            title=event.title or "Ohne Titel",
+            caption=caption_for_event(event, sub_calendars, self.tz),
+            detail_url=f"/calendar/events/{event_id}",
+        )

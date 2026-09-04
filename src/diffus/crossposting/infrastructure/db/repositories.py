@@ -27,9 +27,11 @@ from diffus.crossposting.domain.entities import (
     Post,
     PostDraft,
     Preview,
+    PublishTargets,
     Token,
 )
 from diffus.crossposting.infrastructure.db.models import (
+    ChannelSettingRow,
     DeliveryRow,
     PostDraftMediaRow,
     PostDraftRow,
@@ -37,6 +39,24 @@ from diffus.crossposting.infrastructure.db.models import (
     PreviewRow,
     TokenRow,
 )
+
+# Drafts in review or (retryable) failed — see PostDraft.is_reviewable.
+_REVIEW_DRAFT_STATUSES = (DraftStatus.REVIEW.value, DraftStatus.FAILED.value)
+
+
+def _targets_to_json(targets: PublishTargets | None) -> dict | None:
+    if targets is None:
+        return None
+    return {"instagram": targets.instagram, "destinations": [str(d) for d in targets.destinations]}
+
+
+def _json_to_targets(data: dict | None) -> PublishTargets | None:
+    if data is None:
+        return None
+    return PublishTargets(
+        instagram=data["instagram"],
+        destinations=tuple(Destination.parse(d) for d in data["destinations"]),
+    )
 
 
 def _post_to_row(post: Post) -> dict:
@@ -114,6 +134,8 @@ def _draft_to_row(draft: PostDraft) -> PostDraftRow:
         post_id=draft.post_id,
         created_at=draft.created_at,
         published_at=draft.published_at,
+        targets=_targets_to_json(draft.targets),
+        event_ref=draft.event_ref,
     )
 
 
@@ -128,6 +150,8 @@ def _row_to_draft(row: PostDraftRow, images: Sequence[DraftImage]) -> PostDraft:
         error=row.error,
         post_id=row.post_id,
         published_at=row.published_at,
+        targets=_json_to_targets(row.targets),
+        event_ref=row.event_ref,
     )
 
 
@@ -216,6 +240,23 @@ class SqlDeliveryRepository:
         for row in result.scalars().all():
             grouped.setdefault(row.post_id, []).append(_row_to_delivery(row))
         return grouped
+
+    async def in_review(self) -> dict[str, list[Delivery]]:
+        result = await self._s.execute(
+            select(DeliveryRow).where(DeliveryRow.status == DeliveryStatus.REVIEW.value)
+        )
+        grouped: dict[str, list[Delivery]] = {}
+        for row in result.scalars().all():
+            grouped.setdefault(row.post_id, []).append(_row_to_delivery(row))
+        return grouped
+
+    async def count_posts_in_review(self) -> int:
+        result = await self._s.execute(
+            select(func.count(func.distinct(DeliveryRow.post_id))).where(
+                DeliveryRow.status == DeliveryStatus.REVIEW.value
+            )
+        )
+        return int(result.scalar_one())
 
 
 class SqlPreviewRepository:
@@ -309,6 +350,7 @@ class SqlDraftRepository:
         row.error = draft.error
         row.post_id = draft.post_id
         row.published_at = draft.published_at
+        row.targets = _targets_to_json(draft.targets)
 
     async def get(self, draft_id: str) -> PostDraft | None:
         row = await self._s.get(PostDraftRow, draft_id)
@@ -336,3 +378,49 @@ class SqlDraftRepository:
         row = await self._s.get(PostDraftRow, draft_id)
         if row is not None:
             await self._s.delete(row)  # ON DELETE CASCADE removes post_draft_media rows
+
+    async def in_review(self) -> list[PostDraft]:
+        result = await self._s.execute(
+            select(PostDraftRow)
+            .where(PostDraftRow.status.in_(_REVIEW_DRAFT_STATUSES))
+            .order_by(PostDraftRow.created_at)
+        )
+        drafts: list[PostDraft] = []
+        for row in result.scalars().all():
+            images_result = await self._s.execute(
+                select(PostDraftMediaRow)
+                .where(PostDraftMediaRow.draft_id == row.id)
+                .order_by(PostDraftMediaRow.media_index)
+            )
+            images = [_row_to_image(r) for r in images_result.scalars().all()]
+            drafts.append(_row_to_draft(row, images))
+        return drafts
+
+    async def count_in_review(self) -> int:
+        result = await self._s.execute(
+            select(func.count())
+            .select_from(PostDraftRow)
+            .where(PostDraftRow.status.in_(_REVIEW_DRAFT_STATUSES))
+        )
+        return int(result.scalar_one())
+
+
+class SqlChannelSettingsRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def get_all(self) -> dict[Destination, bool]:
+        result = await self._s.execute(select(ChannelSettingRow))
+        return {
+            Destination.parse(row.destination): row.auto_publish for row in result.scalars().all()
+        }
+
+    async def set(self, destination: Destination, auto_publish: bool) -> None:
+        stmt = pg_insert(ChannelSettingRow).values(
+            destination=str(destination), auto_publish=auto_publish
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[ChannelSettingRow.destination],
+            set_={"auto_publish": stmt.excluded.auto_publish},
+        )
+        await self._s.execute(stmt)

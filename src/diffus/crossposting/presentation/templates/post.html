@@ -55,12 +55,14 @@
         {{ d.attempts }} {{ "Versuch" if d.attempts == 1 else "Versuche" }}, zuletzt nicht durchgekommen
       {%- elif d.status.value == "pending" -%}
         Wird gerade gesendet
+      {%- elif d.status.value == "review" -%}
+        Wartet auf Freigabe
       {%- else -%}
-        War vor der Verbindung schon auf Instagram und wurde deshalb nicht gesendet
+        Nicht gesendet.
       {%- endif -%}
     </p>
     {% if d.error %}<p class="meta">{{ d.error|error_text(300) }}</p>{% endif %}
-    {% if d.status.value != "sent" %}
+    {% if d.status.value not in ("sent", "review") %}
     <form method="post" action="/resend">
       <input type="hidden" name="post_id" value="{{ post.id }}">
       <input type="hidden" name="destination" value="{{ d.destination }}">

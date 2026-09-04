@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% set active_page = "review" %}
+
+{% block title %}Freigabe – Crossposting{% endblock %}
+
+{% block content %}
+<p class="meta kicker">Was noch nicht draußen ist</p>
+<h1 class="h1">Freigabe</h1>
+
+{% if error %}
+<div class="notice"><p class="body">{{ error }}</p></div>
+{% endif %}
+
+{% if not queue.drafts and not queue.posts %}
+<p class="meta foot">Nichts wartet auf Freigabe.</p>
+{% endif %}
+
+{% if queue.drafts %}
+<section class="details">
+  <p class="eyebrow">Neue Posts</p>
+  {% for dr in queue.drafts %}
+  {% set draft = dr.draft %}
+  <article class="row">
+    <div class="row-body">
+      <div class="gallery{% if dr.image_urls|length == 1 %} single{% endif %}">
+        {% for url in dr.image_urls %}
+        <figure class="media"><img src="{{ url }}" alt=""></figure>
+        {% endfor %}
+      </div>
+      <p class="body caption">{% if draft.caption %}{{ draft.caption }}{% else %}<span class="muted">Ohne Text</span>{% endif %}</p>
+      {% if dr.hint %}<p class="meta">Für Termin: <a class="plain" href="{{ dr.hint.detail_url }}" data-modal>{{ dr.hint.title }}</a></p>{% endif %}
+      {% if draft.status.value == "failed" %}
+      <div class="notice"><p class="body">{{ draft.error|error_text }}</p></div>
+      {% endif %}
+      {% set ig_hint = channels.instagram|instagram_hint %}
+      <form method="post" action="/freigabe/drafts/{{ draft.id }}/approve" class="stack">
+        <label>
+          <input type="checkbox" name="instagram" value="true" {% if draft.targets and draft.targets.instagram %}checked{% endif %} {% if ig_hint %}disabled{% endif %}>
+          Instagram
+        </label>
+        {% if ig_hint %}<p class="meta">{{ ig_hint }}</p>{% endif %}
+        {% for t in channels.telegram %}
+        <label>
+          <input type="checkbox" name="telegram" value="{{ t.destination.address }}" {% if draft.targets and t.destination in draft.targets.destinations %}checked{% endif %}>
+          {{ t.label }}
+        </label>
+        {% endfor %}
+        <div class="actions">
+          <button type="submit" class="btn btn-solid">Freigeben</button>
+        </div>
+      </form>
+      <form method="post" action="/freigabe/drafts/{{ draft.id }}/reject">
+        <button type="submit" class="btn">Ablehnen</button>
+      </form>
+    </div>
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if queue.posts %}
+<section class="details">
+  <p class="eyebrow">Von Instagram</p>
+  {% for pr in queue.posts %}
+  {% set post = pr.view.post %}
+  {% set cover = pr.view|stored_cover %}
+  <article class="row">
+    <a class="thumb" href="/posts/{{ post.id }}" data-modal>
+      {% if cover is not none %}
+      <img src="/posts/{{ post.id }}/media/{{ cover }}" alt="" loading="lazy">
+      {% elif post.cover_url %}
+      <img src="{{ post.cover_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">
+      {% else %}
+      <span class="ph">{{ "Video" if post.media and post.media[0].type.value == "video" else "Bild" }}</span>
+      {% endif %}
+    </a>
+    <div class="row-body">
+      <span class="source">{{ post.source|source_label }}</span>
+      {% set caption = post.caption|summary %}
+      <p class="body"><a class="plain" href="/posts/{{ post.id }}" data-modal>{% if caption %}{{ caption }}{% else %}<span class="muted">Ohne Text</span>{% endif %}</a></p>
+      <p class="meta">{{ post.posted_at|when(now) }}</p>
+      <form method="post" action="/freigabe/posts/{{ post.id }}/approve" class="stack">
+        {% for d in pr.proposed %}
+        <label><input type="checkbox" name="telegram" value="{{ d.address }}" checked> {{ d.sink|sink_label }} {{ d.address }}</label>
+        {% endfor %}
+        <div class="actions">
+          <button type="submit" class="btn btn-solid">Freigeben</button>
+        </div>
+      </form>
+      <form method="post" action="/freigabe/posts/{{ post.id }}/reject">
+        <button type="submit" class="btn">Ablehnen</button>
+      </form>
+    </div>
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
+{% endblock %}

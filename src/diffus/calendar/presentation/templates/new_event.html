@@ -1,12 +1,15 @@
 {% extends "base.html" %}
-{% set active_page = "posts" %}
+{% set active_page = "posts" if post else "calendar" %}
 
 {% block title %}Termin anlegen{% endblock %}
 
 {% block content %}
+{% if post %}
 <p class="meta kicker"><a class="plain back" href="/posts/{{ post.id }}">« Zum Post</a></p>
+{% endif %}
 <h1 class="h1">Termin anlegen</h1>
 
+{% if post %}
 <article class="row">
   <a class="thumb" href="{{ post.detail_url }}" data-modal>
     {% if post.thumbnail_url %}<img src="{{ post.thumbnail_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% else %}<span class="ph">Bild</span>{% endif %}
@@ -16,13 +19,14 @@
     <p class="meta">{{ post.posted_at|when(now) }}</p>
   </div>
 </article>
+{% endif %}
 
 {% if error %}
 <div class="notice"><p class="body">{{ error|error_text }}</p></div>
 {% endif %}
 
 <form method="post" action="/calendar/events/new" class="stack">
-  <input type="hidden" name="post_id" value="{{ post.id }}">
+  <input type="hidden" name="post_id" value="{{ post.id if post else '' }}">
   <input type="text" name="title" value="{{ form.title }}" required>
   <input type="date" name="day" value="{{ form.day.isoformat() }}" required>
   <input type="time" name="start" value="{{ form.start.strftime('%H:%M') }}" required>
@@ -44,7 +48,7 @@
 
   <div class="actions">
     <button type="submit" class="btn btn-solid">Termin anlegen</button>
-    <a class="btn" href="/posts/{{ post.id }}">Abbrechen</a>
+    <a class="btn" href="{{ '/posts/' ~ post.id if post else '/calendar' }}">Abbrechen</a>
   </div>
 </form>
 {% endblock %}

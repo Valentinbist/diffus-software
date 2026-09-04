@@ -15,6 +15,7 @@ wired today; the model no longer assumes it.
 | Storage | **Postgres** (SQLAlchemy 2.0 async + Alembic + asyncpg) | Already running compose. Backup = `pg_dump` cron. |
 | Exactly-once | one `deliveries` row per `(post_id, sink, address)`, PK-enforced; claimed with `INSERT … ON CONFLICT DO NOTHING … RETURNING` | The core invariant; retry-safe by construction |
 | Retries | `Delivery` owns it: a FAILED row is retried on every poll until `Delivery.MAX_ATTEMPTS` (5); manual resend bypasses the cap | Policy lives on the entity, so SQL and the test fakes can't drift |
+| Approval (Freigabe) | Per-channel `channel_settings.auto_publish`, default **off**; a fresh delivery or a submitted draft queues in `REVIEW` unless every channel it targets is already switched on | Owner wants "Freigabe first": nothing goes out unreviewed until a channel is explicitly opted in |
 | Persistence boundary | **Unit of Work** (`UnitOfWork` port, `SqlUnitOfWork`); repositories are bound to its session and never commit | Use cases own their transaction boundaries; one place to hook domain events later |
 | Topology | **One process**: poller as an APScheduler job in the FastAPI `lifespan`, `uvicorn --workers 1` (pinned) | One sink doesn't need workers |
 | Queue/broker | None | Postgres is enough at this scale |
@@ -30,16 +31,35 @@ Post          id, source, caption, permalink, media, posted_at
 Destination   (sink, address)  value object; text form "telegram:-100…"
 Delivery      post_id, destination, status, attempts, sent_at, error
               can_retry() / record_sent() / record_failure() / skip()
+              # Freigabe: queue_for_review() / approve() / reject() — PENDING -> REVIEW ->
+              # {PENDING, SKIPPED}, each raising ValueError from any other status. can_retry()
+              # is deliberately unchanged: a REVIEW row is never FAILED, so the poller never
+              # retries it — only a human (or the badge reminding them) moves it on.
+DeliveryStatus PENDING / REVIEW / SENT / FAILED / SKIPPED
 Token         source, access_token: AccessToken, external_user_id, expires_at, refreshed_at, scopes
               needs_refresh(now) / can_publish  # PUBLISH_SCOPE in scopes.split(",")
 AccessToken   value object whose repr/str never reveal the secret
 Preview       a stored still image per (post_id, media index)
 MediaFile     (MediaItem, Path) — what a sink receives
-PostDraft     id, caption, public_key, images: DraftImage[], status, error, post_id, created_at, published_at
+PostDraft     id, caption, public_key, images: DraftImage[], status, error, post_id, created_at, published_at,
+              targets: PublishTargets | None, event_ref: str | None  # "calendar:<event id>"
               # a post being composed, between upload and publish — see "Public media route" below
               mark_published(post_id, now) / mark_failed(error) / public_media_url(base, index)
+              submit_for_review(targets)  # DRAFT -> REVIEW, storing the chosen targets
+              is_reviewable()  # status in {REVIEW, FAILED} and targets is not None — the
+                                # Freigabe page offers a queued draft AND a retryable failure
+DraftStatus   DRAFT / REVIEW / PUBLISHED / FAILED
 DraftImage    content_type, width, height, data  # one already-normalised (JPEG) upload
 PublishTargets instagram: bool, destinations: tuple[Destination, ...]  # what the wizard's publish step chose
+ChannelPolicy destination: Destination, auto_publish: bool  # one channel_settings row (see Freigabe below)
+INSTAGRAM_CHANNEL  Destination("instagram", "account")  # the fixed key for both the Instagram
+              # channel_settings row and the SENT Delivery a wizard post records when it publishes
+              # to Instagram; fixed rather than keyed by the connected account's id because the
+              # switch (and the settings row) must exist before any token does
+ComposeHint   event_id, title, caption, detail_url  # what the calendar offers to prefill the
+              # compose wizard for one event; a small mirror of calendar.domain.entities.ComposeHint
+              # (identical fields on both sides — the hint needs nothing context-specific), read via
+              # EventDirectory.compose_hint
 LinkedEvent   id, title, starts_at, detail_url, removed
               # the connector's own view of a calendar event, via EventDirectory — mirrors
               # calendar.domain.entities.LinkablePost the other way round

@@ -82,3 +82,24 @@ async def test_a_failing_image_processor_propagates_the_error_and_writes_nothing
         await create.run("Hallo", [("a.jpg", b"one")], now=NOW)
 
     assert uow.commits == 0
+
+
+async def test_event_ref_is_stored_on_the_draft():
+    create, uow = make_create()
+
+    draft = await create.run(
+        "Hallo", [("a.jpg", b"one")], now=NOW, event_ref="calendar:e1"
+    )
+
+    assert draft.event_ref == "calendar:e1"
+    stored = await uow.drafts.get(draft.id)
+    assert stored is not None
+    assert stored.event_ref == "calendar:e1"
+
+
+async def test_event_ref_defaults_to_none():
+    create, _uow = make_create()
+
+    draft = await create.run("Hallo", [("a.jpg", b"one")], now=NOW)
+
+    assert draft.event_ref is None

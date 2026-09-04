@@ -5,7 +5,7 @@ Uses httpx.ASGITransport, not Starlette's deprecated TestClient.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -13,43 +13,44 @@ import pytest
 
 from diffus.app import create_app, lifespan
 from diffus.calendar.application.calendar_events import GetCalendarEvents
-from diffus.calendar.application.compose_post import ComposePostForEvent
 from diffus.calendar.application.create_event import CreateEventForPost
 from diffus.calendar.application.event_detail import GetEventDetail
 from diffus.calendar.application.link_event_post import LinkEventPost
 from diffus.calendar.application.link_picker import GetLinkPicker
 from diffus.calendar.application.sync_calendar import SyncCalendar
 from diffus.calendar.application.sync_job import CalendarSyncJob
-from diffus.calendar.domain.entities import (
-    CalendarEvent,
-    CalendarSnapshot,
-    InstagramState,
-    LinkablePost,
-    PublishOptions,
-    TelegramTarget,
-)
-from diffus.calendar.domain.ports import PostPublisher
-from diffus.calendar.infrastructure.crossposting import CrosspostingPublisher
+from diffus.calendar.domain.entities import CalendarEvent, CalendarSnapshot, LinkablePost
 from diffus.calendar.presentation.routes import build_templates as build_calendar_templates
 from diffus.calendar.presentation.services import CalendarServices
+from diffus.crossposting.application.channels import GetChannels, SetAutoPublish
 from diffus.crossposting.application.connect_instagram import ConnectInstagram
 from diffus.crossposting.application.deliver import DeliverPost
 from diffus.crossposting.application.drafts import (
+    ApproveDraft,
     CreateDraft,
     DiscardDraft,
     GetDraft,
     GetDraftImage,
+    SubmitDraft,
 )
 from diffus.crossposting.application.overview import GetOverview, NoEvents
 from diffus.crossposting.application.post_detail import GetPostDetail
 from diffus.crossposting.application.preview import GetPreview
 from diffus.crossposting.application.publish_draft import PublishDraft
-from diffus.crossposting.application.publish_readiness import GetPublishReadiness
 from diffus.crossposting.application.refresh_token import EnsureFreshToken
 from diffus.crossposting.application.resend_delivery import ResendDelivery
+from diffus.crossposting.application.review import (
+    ApprovePostDeliveries,
+    CountReview,
+    GetReviewQueue,
+    RejectPostDeliveries,
+)
 from diffus.crossposting.application.sync_job import SyncJob
 from diffus.crossposting.application.sync_posts import SyncPosts
 from diffus.crossposting.domain.entities import (
+    INSTAGRAM_CHANNEL,
+    AccessToken,
+    ComposeHint,
     Destination,
     DraftImage,
     LinkedEvent,
@@ -58,13 +59,13 @@ from diffus.crossposting.domain.entities import (
     Post,
     PostDraft,
     Preview,
+    Token,
 )
 from diffus.crossposting.domain.ports import EventDirectory
 from diffus.crossposting.presentation.routes import build_templates
 from diffus.crossposting.presentation.services import Services
 from diffus.shared.config import get_settings
 from tests.calendar.fakes import FakeCalendar, FakeCalendarUnitOfWork, FakeEvents, FakePostCatalog
-from tests.calendar.fakes import FakePublisher as FakeCalendarPublisher
 from tests.crossposting.fakes import (
     FakeAuth,
     FakeEventDirectory,
@@ -150,13 +151,18 @@ def make_services(
     sink: FakeSink,
     media: FakeMedia,
     events: EventDirectory | None = None,
+    source: StaticSource | None = None,
 ) -> Services:
     events = events if events is not None else NoEvents()
     auth = FakeAuth()
     destinations = [Destination("telegram", "c1"), Destination("telegram", "c2")]
     deliver = DeliverPost(media=media, sinks={"telegram": sink}, uow=uow)
     sync = SyncPosts(
-        source=StaticSource([]), media=media, deliver=deliver, destinations=destinations, uow=uow
+        source=source if source is not None else StaticSource([]),
+        media=media,
+        deliver=deliver,
+        destinations=destinations,
+        uow=uow,
     )
     job = SyncJob(sync=sync, refresh=EnsureFreshToken(auth=auth, uow=uow))
     publisher = FakePublisher()
@@ -167,13 +173,15 @@ def make_services(
         destinations=destinations,
         public_base_url="https://example.com",
         lock=job.lock,
+        events=events,
     )
+    detail = GetPostDetail(uow=uow, events=events)
     return Services(
         sync_job=job,
         connect=ConnectInstagram(auth=auth, uow=uow),
         resend=ResendDelivery(uow=uow, deliver=deliver),
         overview=GetOverview(uow=uow, source="instagram", events=events),
-        detail=GetPostDetail(uow=uow, events=events),
+        detail=detail,
         preview=GetPreview(uow=uow),
         destinations=destinations,
         templates=build_templates(ZoneInfo("Europe/Berlin")),
@@ -182,9 +190,21 @@ def make_services(
         discard_draft=DiscardDraft(uow=uow),
         get_draft=GetDraft(uow=uow),
         draft_image=GetDraftImage(uow=uow),
-        readiness=GetPublishReadiness(
-            uow=uow, source="instagram", public_base_url="https://example.com"
+        channels=GetChannels(
+            uow=uow, source="instagram", destinations=destinations, public_base_url="https://example.com"
         ),
+        set_auto_publish=SetAutoPublish(uow=uow, channels=[INSTAGRAM_CHANNEL, *destinations]),
+        submit_draft=SubmitDraft(uow=uow, publish=publish_draft, destinations=destinations),
+        approve_draft=ApproveDraft(publish=publish_draft),
+        review_queue=GetReviewQueue(
+            uow=uow, detail=detail, events=events, destinations=destinations
+        ),
+        review_count=CountReview(uow=uow),
+        approve_post=ApprovePostDeliveries(
+            uow=uow, deliver=deliver, destinations=destinations, lock=job.lock
+        ),
+        reject_post=RejectPostDeliveries(uow=uow),
+        events=events,
     )
 
 
@@ -227,25 +247,17 @@ def make_calendar_uow() -> tuple[FakeCalendarUnitOfWork, FakePostCatalog]:
 def make_calendar_services(
     uow: FakeCalendarUnitOfWork,
     catalog: FakePostCatalog,
-    publisher: PostPublisher | None = None,
 ) -> CalendarServices:
     tz = ZoneInfo("Europe/Berlin")
     snapshot = CalendarSnapshot(sub_calendars=(), events=())
     calendar_gateway = FakeCalendar(snapshot)
     sync = SyncCalendar(calendar=calendar_gateway, uow=uow)
-    if publisher is None:
-        options = PublishOptions(
-            instagram=InstagramState.READY,
-            targets=(TelegramTarget(address="c1", label="Telegram"),),
-        )
-        publisher = FakeCalendarPublisher(options=options)
     return CalendarServices(
         sync_job=CalendarSyncJob(sync),
         calendar=GetCalendarEvents(uow=uow, posts=catalog, tz=tz),
         event_detail=GetEventDetail(uow=uow, posts=catalog, tz=tz),
         link_post=LinkEventPost(uow=uow, posts=catalog),
         link_picker=GetLinkPicker(uow=uow, posts=catalog, tz=tz),
-        compose=ComposePostForEvent(uow=uow, publisher=publisher, posts=catalog, tz=tz),
         create_event=CreateEventForPost(uow=uow, posts=catalog, calendar=calendar_gateway, tz=tz),
         tz=tz,
         templates=build_calendar_templates(tz, calendar_enabled=True),
@@ -481,65 +493,6 @@ async def test_pages_and_resend_work_on_fakes(settings_env):
     assert resp.status_code == 401
 
 
-async def test_compose_wizard_full_flow_uploads_previews_and_publishes_a_post(settings_env):
-    uow, catalog = make_calendar_uow()
-    services = make_services(await make_uow(), FakeSink(), FakeMedia())
-    publisher = CrosspostingPublisher(
-        create=services.create_draft,
-        publish_draft=services.publish_draft,
-        readiness=services.readiness,
-        drafts=services.get_draft,
-        discard_draft=services.discard_draft,
-        destinations=services.destinations,
-    )
-    calendar_services = make_calendar_services(uow, catalog, publisher=publisher)
-    app = create_app(services=services, calendar=calendar_services)
-
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
-    ) as client:
-        resp = await client.post(
-            "/calendar/events/e1/compose",
-            data={"caption": "Hallo", "telegram": "c1"},
-            files=[("images", ("a.png", b"fake-1x1-png-bytes", "image/png"))],
-        )
-        assert resp.status_code == 303
-        preview_url = resp.headers["location"]
-        assert "/calendar/events/e1/compose/" in preview_url
-
-        resp = await client.get(preview_url)
-        assert resp.status_code == 200
-        assert "Vorschau" in resp.text
-
-        publish_url = preview_url.split("?")[0] + "/publish"
-        resp = await client.post(publish_url, data={"telegram": "c1"})
-        assert resp.status_code == 303
-        assert "?published=" in resp.headers["location"]
-
-        resp = await client.get(resp.headers["location"])
-        assert resp.status_code == 200
-        assert "Veröffentlicht" in resp.text
-        assert "/posts/diffus:" in resp.text
-
-
-async def test_compose_upload_over_the_image_limit_is_rejected_with_413(settings_env):
-    uow, catalog = make_calendar_uow()
-    calendar_services = make_calendar_services(uow, catalog)
-    services = make_services(await make_uow(), FakeSink(), FakeMedia())
-    app = create_app(services=services, calendar=calendar_services)
-
-    files = [("images", (f"{i}.png", b"x", "image/png")) for i in range(11)]
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
-    ) as client:
-        resp = await client.post(
-            "/calendar/events/e1/compose", data={"caption": "Hallo"}, files=files
-        )
-
-    assert resp.status_code == 413
-    assert "Höchstens 10 Bilder" in resp.text
-
-
 async def test_new_event_wizard_is_prefilled_and_posting_it_creates_and_links_the_event(
     settings_env,
 ):
@@ -573,3 +526,281 @@ async def test_new_event_wizard_is_prefilled_and_posting_it_creates_and_links_th
         resp = await client.get(resp.headers["location"])
         assert resp.status_code == 200
         assert "/posts/p1" in resp.text
+
+
+async def test_standalone_new_event_wizard_works_without_a_post(settings_env):
+    uow, catalog = make_calendar_uow()
+    calendar_services = make_calendar_services(uow, catalog)
+    services = make_services(await make_uow(), FakeSink(), FakeMedia())
+    app = create_app(services=services, calendar=calendar_services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.get("/calendar/events/new")
+        assert resp.status_code == 200
+        assert "Termin anlegen" in resp.text
+
+        resp = await client.post(
+            "/calendar/events/new",
+            data={
+                "title": "Spontaner Termin",
+                "day": "2026-09-10",
+                "start": "18:00",
+                "end": "20:00",
+                "description": "",
+                "location": "",
+                "who": "",
+            },
+        )
+        assert resp.status_code == 303
+
+        resp = await client.get(resp.headers["location"])
+        assert resp.status_code == 200
+        assert "Noch kein Post verknüpft." in resp.text
+
+
+# -- round 3: the crossposting compose wizard, Freigabe queue, and channel switches --
+
+ONE_BY_ONE_PNG = b"fake-1x1-png-bytes"
+
+
+async def test_compose_wizard_queues_for_freigabe_then_approval_delivers_via_telegram(
+    settings_env,
+):
+    uow = await make_uow()
+    sink = FakeSink()
+    services = make_services(uow, sink, FakeMedia())
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.post(
+            "/posts/new",
+            data={"caption": "Hallo", "telegram": "c1"},
+            files=[("images", ("a.png", ONE_BY_ONE_PNG, "image/png"))],
+        )
+        assert resp.status_code == 303
+        preview_url = resp.headers["location"]
+        assert preview_url.startswith("/posts/new/")
+        draft_id = preview_url.split("?")[0].rsplit("/", 1)[-1]
+
+        resp = await client.get(preview_url)
+        assert resp.status_code == 200
+        assert "Zur Freigabe" in resp.text
+
+        resp = await client.post(preview_url.split("?")[0] + "/submit", data={"telegram": "c1"})
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/freigabe"
+
+        resp = await client.get("/freigabe")
+        assert resp.status_code == 200
+        assert "Hallo" in resp.text
+
+        resp = await client.get("/freigabe/count")
+        assert resp.status_code == 200
+        assert '<span class="badge">1</span>' in resp.text
+
+        resp = await client.post(
+            f"/freigabe/drafts/{draft_id}/approve", data={"telegram": "c1"}
+        )
+        assert resp.status_code == 303
+        post_id = f"diffus:{draft_id}"
+        assert resp.headers["location"] == f"/posts/{post_id}"
+
+        resp = await client.get(resp.headers["location"])
+        assert resp.status_code == 200
+        assert "Telegram c1 ✓" in resp.text  # multi_target: two chats configured (c1, c2)
+
+    assert sink.calls == [(post_id, "c1")]
+
+
+async def test_channel_auto_publish_switch_makes_a_compose_submit_publish_immediately(
+    settings_env,
+):
+    uow = await make_uow()
+    sink = FakeSink()
+    services = make_services(uow, sink, FakeMedia())
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.post("/channels", data={"auto": "telegram:c1"})
+        assert resp.status_code == 303
+
+        resp = await client.post(
+            "/posts/new",
+            data={"caption": "Direkt", "telegram": "c1"},
+            files=[("images", ("a.png", ONE_BY_ONE_PNG, "image/png"))],
+        )
+        preview_url = resp.headers["location"]
+        draft_id = preview_url.split("?")[0].rsplit("/", 1)[-1]
+
+        resp = await client.get(preview_url)
+        assert "Veröffentlichen" in resp.text
+
+        resp = await client.post(preview_url.split("?")[0] + "/submit", data={"telegram": "c1"})
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/posts/diffus:{draft_id}"
+
+    assert sink.calls == [(f"diffus:{draft_id}", "c1")]
+
+
+async def test_compose_new_route_is_not_swallowed_by_the_post_detail_route(settings_env):
+    services = make_services(await make_uow(), FakeSink(), FakeMedia())
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.get("/posts/new")
+
+    assert resp.status_code == 200
+    assert "Post erstellen" in resp.text
+
+
+async def test_compose_with_an_event_prefills_the_caption_and_links_the_post_after_publishing(
+    settings_env,
+):
+    hint = ComposeHint(
+        event_id="e1", title="Plenum", caption="Vorlage", detail_url="/calendar/events/e1"
+    )
+    events = FakeEventDirectory(hints={"e1": hint})
+    uow = await make_uow()
+    sink = FakeSink()
+    services = make_services(uow, sink, FakeMedia(), events=events)
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.get("/posts/new?event=e1")
+        assert resp.status_code == 200
+        assert "Vorlage" in resp.text
+
+        await client.post("/channels", data={"auto": "telegram:c1"})
+
+        resp = await client.post(
+            "/posts/new",
+            data={"caption": "Vorlage", "telegram": "c1", "event": "e1"},
+            files=[("images", ("a.png", ONE_BY_ONE_PNG, "image/png"))],
+        )
+        preview_url = resp.headers["location"]
+
+        resp = await client.post(preview_url.split("?")[0] + "/submit", data={"telegram": "c1"})
+        assert resp.status_code == 303
+
+    assert events.links
+    assert events.links[0][0] == "e1"
+
+
+async def test_new_posts_compose_upload_over_the_image_limit_is_rejected_with_413(settings_env):
+    services = make_services(await make_uow(), FakeSink(), FakeMedia())
+    app = create_app(services=services)
+    files = [("images", (f"{i}.png", b"x", "image/png")) for i in range(11)]
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.post("/posts/new", data={"caption": "Hallo"}, files=files)
+
+    assert resp.status_code == 413
+    assert "Höchstens 10 Bilder" in resp.text
+
+
+async def test_set_channels_with_a_malformed_destination_is_rejected(settings_env):
+    services = make_services(await make_uow(), FakeSink(), FakeMedia())
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.post("/channels", data={"auto": "nonsense"})
+
+    assert resp.status_code == 400
+
+
+async def test_review_count_badge_requires_auth(settings_env):
+    services = make_services(await make_uow(), FakeSink(), FakeMedia())
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/freigabe/count")
+
+    assert resp.status_code == 401
+
+
+async def test_a_polled_post_with_auto_off_queues_for_freigabe_and_can_be_approved(settings_env):
+    token = Token(
+        source="instagram",
+        access_token=AccessToken("t"),
+        external_user_id="1",
+        expires_at=datetime.now(UTC) + timedelta(days=60),
+        refreshed_at=datetime.now(UTC),
+        scopes=Token.PUBLISH_SCOPE,
+    )
+    uow = await make_uow()  # already holds post "p1", so the bootstrap (mark_seen_only) is done
+    await uow.tokens.save(token)
+    await uow.commit()
+    new_post = Post(
+        id="p2",
+        source="instagram",
+        caption="Neuer Post",
+        permalink="https://instagram.com/p/p2/",
+        media=(MediaItem(url="https://cdn.example.com/p2.jpg", type=MediaType.IMAGE),),
+        posted_at=datetime(2026, 1, 2, 12, 0, tzinfo=UTC),
+    )
+    sink = FakeSink()
+    services = make_services(uow, sink, FakeMedia(), source=StaticSource([new_post]))
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.post("/sync")
+        assert resp.status_code == 303
+
+        resp = await client.get("/freigabe")
+        assert resp.status_code == 200
+        assert "Von Instagram" in resp.text
+        assert "Neuer Post" in resp.text
+
+        resp = await client.post("/freigabe/posts/p2/approve", data={"telegram": "c1"})
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/posts/p2"
+
+    assert sink.calls == [("p2", "c1")]
+
+
+async def test_rejecting_a_draft_removes_it_from_freigabe(settings_env):
+    uow = await make_uow()
+    sink = FakeSink()
+    services = make_services(uow, sink, FakeMedia())
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.post(
+            "/posts/new",
+            data={"caption": "Wird abgelehnt", "telegram": "c1"},
+            files=[("images", ("a.png", ONE_BY_ONE_PNG, "image/png"))],
+        )
+        preview_url = resp.headers["location"]
+        draft_id = preview_url.split("?")[0].rsplit("/", 1)[-1]
+
+        resp = await client.post(preview_url.split("?")[0] + "/submit", data={"telegram": "c1"})
+        assert resp.headers["location"] == "/freigabe"
+
+        resp = await client.get("/freigabe")
+        assert "Wird abgelehnt" in resp.text
+
+        resp = await client.post(f"/freigabe/drafts/{draft_id}/reject")
+        assert resp.status_code == 303
+
+        resp = await client.get("/freigabe")
+        assert "Wird abgelehnt" not in resp.text

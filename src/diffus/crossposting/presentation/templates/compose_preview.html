@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% set active_page = "posts" %}
+
+{% block title %}Vorschau – Crossposting{% endblock %}
+
+{% block content %}
+<p class="meta kicker"><a class="plain back" href="/posts/new{% if hint %}?event={{ hint.event_id }}{% endif %}">« Zurück</a></p>
+<h1 class="h1">Vorschau</h1>
+
+<div class="gallery{% if image_urls|length == 1 %} single{% endif %}">
+  {% for url in image_urls %}
+  <figure class="media"><img src="{{ url }}" alt=""></figure>
+  {% endfor %}
+</div>
+
+<p class="body caption">{{ draft.caption }}</p>
+{% if hint %}<p class="meta">Für Termin: <a class="plain" href="{{ hint.detail_url }}" data-modal>{{ hint.title }}</a></p>{% endif %}
+
+<section class="details">
+  <p class="eyebrow">Ziele</p>
+  {% if instagram %}<p class="meta">Instagram – {% if channels.instagram.auto_publish %}automatisch{% else %}Freigabe{% endif %}</p>{% endif %}
+  {% for t in channels.telegram if t.destination.address in telegram %}
+  <p class="meta">{{ t.label }} – {% if t.auto_publish %}automatisch{% else %}Freigabe{% endif %}</p>
+  {% endfor %}
+</section>
+
+{% if error %}
+<div class="notice"><p class="body">{{ error }}</p></div>
+{% endif %}
+
+<div class="actions">
+  <form method="post" action="/posts/new/{{ draft.id }}/submit">
+    {% if instagram %}<input type="hidden" name="instagram" value="true">{% endif %}
+    {% for a in telegram %}<input type="hidden" name="telegram" value="{{ a }}">{% endfor %}
+    <button type="submit" class="btn btn-solid">{% if all_auto %}Veröffentlichen{% else %}Zur Freigabe{% endif %}</button>
+  </form>
+  <form method="post" action="/posts/new/{{ draft.id }}/discard">
+    <button type="submit" class="btn">Verwerfen</button>
+  </form>
+</div>
+{% endblock %}

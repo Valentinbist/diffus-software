@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% set active_page = "posts" %}
+
+{% block title %}Post erstellen – Crossposting{% endblock %}
+
+{% block content %}
+<p class="meta kicker"><a class="plain back" href="{{ cancel_url }}">« Zurück</a></p>
+<h1 class="h1">Post erstellen</h1>
+{% if hint %}<p class="meta">Für Termin: <a class="plain" href="{{ hint.detail_url }}" data-modal>{{ hint.title }}</a></p>{% endif %}
+
+{% if error %}
+<div class="notice"><p class="body">{{ error }}</p></div>
+{% endif %}
+
+<form method="post" action="/posts/new" enctype="multipart/form-data" class="stack">
+  <input type="hidden" name="event" value="{{ event }}">
+  <textarea name="caption" rows="8">{{ caption }}</textarea>
+  <input type="file" name="images" multiple accept="image/*" required>
+
+  <div class="targets">
+    {% set ig_hint = channels.instagram|instagram_hint %}
+    <label>
+      <input type="checkbox" name="instagram" {% if not ig_hint %}checked{% else %}disabled{% endif %}>
+      Instagram
+    </label>
+    <span class="meta">{% if channels.instagram.auto_publish %}automatisch{% else %}Freigabe{% endif %}</span>
+    {% if ig_hint %}<p class="meta">{{ ig_hint }}</p>{% endif %}
+
+    {% for t in channels.telegram %}
+    <label>
+      <input type="checkbox" name="telegram" value="{{ t.destination.address }}" checked>
+      {{ t.label }}
+    </label>
+    <span class="meta">{% if t.auto_publish %}automatisch{% else %}Freigabe{% endif %}</span>
+    {% endfor %}
+  </div>
+
+  <div class="actions">
+    <button type="submit" class="btn btn-solid">Weiter</button>
+    <a class="btn" href="{{ cancel_url }}">Abbrechen</a>
+  </div>
+</form>
+{% endblock %}

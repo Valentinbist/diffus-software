@@ -5,17 +5,25 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from diffus.crossposting.application.channels import Channels, InstagramChannel, TelegramChannel
 from diffus.crossposting.application.overview import Overview, PostView
+from diffus.crossposting.application.review import DraftReview, PostReview, ReviewQueue
 from diffus.crossposting.application.sync_job import LastRun
 from diffus.crossposting.domain.entities import (
+    INSTAGRAM_CHANNEL,
     AccessToken,
+    ComposeHint,
     Delivery,
     DeliveryStatus,
     Destination,
+    DraftImage,
+    DraftStatus,
     LinkedEvent,
     MediaItem,
     MediaType,
     Post,
+    PostDraft,
+    PublishTargets,
     Token,
 )
 from diffus.crossposting.presentation import display
@@ -24,6 +32,28 @@ from diffus.crossposting.presentation.routes import build_templates
 templates = build_templates(ZoneInfo("Europe/Berlin"))
 
 NOW = datetime(2026, 9, 3, 10, 0, tzinfo=UTC)  # 12:00 in Berlin
+C1 = Destination("telegram", "c1")
+
+
+def make_channels(
+    instagram_connected: bool = True,
+    instagram_can_publish: bool = True,
+    instagram_public_https: bool = True,
+    instagram_auto: bool = False,
+    telegram: tuple[TelegramChannel, ...] = (
+        TelegramChannel(destination=C1, label="Telegram", auto_publish=False),
+    ),
+) -> Channels:
+    return Channels(
+        instagram=InstagramChannel(
+            destination=INSTAGRAM_CHANNEL,
+            connected=instagram_connected,
+            can_publish=instagram_can_publish,
+            public_https=instagram_public_https,
+            auto_publish=instagram_auto,
+        ),
+        telegram=telegram,
+    )
 
 
 def make_token(days_left: int = 40, can_publish: bool = True) -> Token:
@@ -62,7 +92,13 @@ def make_post(
 
 
 def render_index(
-    ov: Overview, last_run: LastRun | None = None, multi_target: bool = False, events: str = "all"
+    ov: Overview,
+    last_run: LastRun | None = None,
+    multi_target: bool = False,
+    events: str = "all",
+    source: str = "all",
+    channels: Channels | None = None,
+    review_count: int = 0,
 ) -> str:
     return templates.env.get_template("index.html").render(
         ov=ov,
@@ -71,12 +107,72 @@ def render_index(
         multi_target=multi_target,
         events=events,
         event_pills=display.EVENT_PILLS,
+        source=source,
+        source_pills=display.SOURCE_PILLS,
+        channels=channels or make_channels(),
+        review_count=review_count,
     )
 
 
 def render_post(view: PostView, multi_target: bool = False) -> str:
     return templates.env.get_template("post.html").render(
         view=view, now=NOW, multi_target=multi_target
+    )
+
+
+def render_review(
+    queue: ReviewQueue, channels: Channels | None = None, error: str | None = None
+) -> str:
+    return templates.env.get_template("review.html").render(
+        queue=queue, channels=channels or make_channels(), now=NOW, multi_target=False, error=error
+    )
+
+
+def render_compose(
+    caption: str = "",
+    hint: ComposeHint | None = None,
+    event: str = "",
+    channels: Channels | None = None,
+    error: str | None = None,
+    cancel_url: str = "/",
+) -> str:
+    return templates.env.get_template("compose.html").render(
+        caption=caption,
+        hint=hint,
+        event=event,
+        channels=channels or make_channels(),
+        error=error,
+        now=NOW,
+        cancel_url=cancel_url,
+    )
+
+
+def make_draft(caption: str = "Hallo") -> PostDraft:
+    return PostDraft.new(
+        caption=caption, images=[DraftImage("image/jpeg", 1, 1, b"x")], now=NOW
+    )
+
+
+def render_compose_preview(
+    draft: PostDraft | None = None,
+    hint: ComposeHint | None = None,
+    channels: Channels | None = None,
+    instagram: bool = False,
+    telegram: list[str] | None = None,
+    all_auto: bool = False,
+    error: str | None = None,
+) -> str:
+    draft = draft or make_draft()
+    return templates.env.get_template("compose_preview.html").render(
+        draft=draft,
+        image_urls=tuple(f"/drafts/{draft.id}/media/{i}" for i in range(len(draft.images))),
+        hint=hint,
+        channels=channels or make_channels(),
+        instagram=instagram,
+        telegram=telegram or [],
+        all_auto=all_auto,
+        error=error,
+        now=NOW,
     )
 
 
@@ -265,6 +361,10 @@ def test_nav_shows_the_calendar_link_only_when_the_calendar_context_is_enabled()
         multi_target=False,
         events="all",
         event_pills=display.EVENT_PILLS,
+        source="all",
+        source_pills=display.SOURCE_PILLS,
+        channels=make_channels(),
+        review_count=0,
     )
     without_calendar = render_index(ov)
 
@@ -310,11 +410,15 @@ def test_event_pills_show_only_when_the_calendar_context_is_enabled():
         multi_target=False,
         events="with",
         event_pills=display.EVENT_PILLS,
+        source="all",
+        source_pills=display.SOURCE_PILLS,
+        channels=make_channels(),
+        review_count=0,
     )
 
     assert '<span class="pill current">Mit Termin</span>' in with_calendar
-    assert 'href="/?events=without"' in with_calendar
-    assert 'href="/?events=with"' not in render_index(ov)  # disabled: no pills at all
+    assert 'href="/?source=all&events=without"' in with_calendar
+    assert 'href="/?source=all&events=with"' not in render_index(ov)  # disabled: no pills at all
 
 
 def test_index_row_lists_linked_events_and_marks_a_removed_one():
@@ -349,3 +453,211 @@ def test_post_detail_termine_section_and_link_button_only_when_calendar_enabled(
     assert 'href="/calendar/link?post=p1" data-modal>Mit Termin verknüpfen</a>' in with_event
     assert "Mit keinem Termin verknüpft." in without_event
     assert "Mit Termin verknüpfen" not in disabled
+
+
+# -- Social Posts: rename, source pill, Freigabe notice, Kanäle form --------------
+
+
+def test_social_posts_h1_and_kicker():
+    html = render_index(Overview(token=None, posts=[]))
+
+    assert "<h1 class=\"h1\">Social Posts</h1>" in html
+    assert "Instagram · Telegram · App" in html
+
+
+def test_index_row_shows_a_source_pill_before_the_caption():
+    view = PostView(post=make_post(), deliveries=[])
+
+    html = render_index(connected(view))
+
+    assert '<span class="source">Instagram</span>' in html
+
+
+def test_review_delivery_shows_freigabe_ausstehend_and_no_resend_button():
+    review = Delivery(
+        post_id="p1", destination=Destination("telegram", "c1"), status=DeliveryStatus.REVIEW
+    )
+
+    html = render_index(connected(PostView(post=make_post(), deliveries=[review])))
+
+    assert "Telegram · Freigabe ausstehend" in html
+    assert "Nochmal senden" not in html
+
+
+def test_review_notice_shows_only_when_the_count_is_positive():
+    zero = render_index(Overview(token=None, posts=[]), review_count=0)
+    one = render_index(Overview(token=None, posts=[]), review_count=1)
+    three = render_index(Overview(token=None, posts=[]), review_count=3)
+
+    assert "wartet auf Freigabe" not in zero
+    assert "warten auf Freigabe" not in zero
+    assert "1 Post wartet auf Freigabe." in one
+    assert "3 Posts warten auf Freigabe." in three
+
+
+def test_kanaele_form_checkbox_uses_the_destination_text_form():
+    channels = make_channels(
+        telegram=(TelegramChannel(destination=C1, label="Telegram", auto_publish=True),)
+    )
+
+    html = render_index(Overview(token=None, posts=[]), channels=channels)
+
+    assert 'name="auto" value="telegram:c1" checked' in html
+    assert "Ohne Haken wartet ein Post für diesen Kanal auf Freigabe." in html
+
+
+def test_kanaele_form_shows_the_instagram_hint_when_not_ready():
+    channels = make_channels(instagram_connected=False)
+
+    html = render_index(Overview(token=None, posts=[]), channels=channels)
+
+    assert "Instagram ist nicht verbunden." in html
+
+
+def test_post_erstellen_button_opens_the_compose_wizard_in_a_modal():
+    html = render_index(Overview(token=None, posts=[]))
+
+    assert 'href="/posts/new" data-modal>Post erstellen</a>' in html
+
+
+# -- post detail: Freigabe + Instagram delivery + SKIPPED wording ----------------
+
+
+def test_post_detail_review_delivery_waits_for_freigabe_without_a_resend_button():
+    review = Delivery(
+        post_id="p1", destination=Destination("telegram", "c1"), status=DeliveryStatus.REVIEW
+    )
+
+    html = render_post(PostView(post=make_post(), deliveries=[review]))
+
+    assert "Wartet auf Freigabe" in html
+    assert "Nochmal senden" not in html
+
+
+def test_post_detail_shows_instagram_delivery_as_a_check():
+    sent = Delivery(post_id="p1", destination=INSTAGRAM_CHANNEL, status=DeliveryStatus.SENT)
+
+    html = render_post(PostView(post=make_post(), deliveries=[sent]))
+
+    assert "Instagram ✓" in html
+
+
+def test_post_detail_skipped_delivery_reads_nicht_gesendet():
+    skipped = Delivery(
+        post_id="p1", destination=Destination("telegram", "c1"), status=DeliveryStatus.SKIPPED
+    )
+
+    html = render_post(PostView(post=make_post(), deliveries=[skipped]))
+
+    assert "Nicht gesendet." in html
+
+
+# -- Freigabe page ------------------------------------------------------------------
+
+
+def test_review_page_empty_state():
+    html = render_review(ReviewQueue(drafts=[], posts=[]))
+
+    assert "Nichts wartet auf Freigabe." in html
+
+
+def test_review_page_draft_block_shows_hint_targets_and_a_failed_error():
+    draft = PostDraft.new(
+        caption="Hallo Welt",
+        images=[DraftImage("image/jpeg", 1, 1, b"x")],
+        now=NOW,
+        event_ref="calendar:e1",
+    )
+    draft.status = DraftStatus.FAILED
+    draft.error = "Instagram meldet einen Fehler"
+    draft.targets = PublishTargets(instagram=False, destinations=(C1,))
+    hint = ComposeHint(event_id="e1", title="Plenum", caption="x", detail_url="/calendar/events/e1")
+    review = DraftReview(draft=draft, image_urls=(f"/drafts/{draft.id}/media/0",), hint=hint)
+
+    html = render_review(ReviewQueue(drafts=[review], posts=[]))
+
+    assert "Hallo Welt" in html
+    assert "Für Termin:" in html
+    assert 'href="/calendar/events/e1" data-modal>Plenum</a>' in html
+    assert "Instagram meldet einen Fehler" in html
+    assert f'action="/freigabe/drafts/{draft.id}/approve"' in html
+    assert f'action="/freigabe/drafts/{draft.id}/reject"' in html
+    assert 'name="telegram" value="c1" checked' in html
+
+
+def test_review_page_post_block_lists_proposed_destinations():
+    view = PostView(post=make_post(), deliveries=[])
+    review = PostReview(view=view, proposed=[C1])
+
+    html = render_review(ReviewQueue(drafts=[], posts=[review]))
+
+    assert f'action="/freigabe/posts/{view.post.id}/approve"' in html
+    assert f'action="/freigabe/posts/{view.post.id}/reject"' in html
+    assert 'name="telegram" value="c1" checked' in html
+
+
+# -- compose wizard templates --------------------------------------------------------
+
+
+def test_compose_form_prefills_the_caption_and_tags_each_channel():
+    channels = make_channels(
+        telegram=(TelegramChannel(destination=C1, label="Telegram", auto_publish=True),)
+    )
+
+    html = render_compose(caption="Vorbefüllter Text", channels=channels)
+
+    assert "Vorbefüllter Text" in html
+    assert "automatisch" in html
+
+
+def test_compose_form_disables_instagram_and_shows_the_hint_when_not_ready():
+    channels = make_channels(instagram_connected=False)
+
+    html = render_compose(channels=channels)
+
+    assert 'name="instagram"' in html
+    assert "disabled" in html
+    assert "Instagram ist nicht verbunden." in html
+
+
+def test_compose_preview_button_label_depends_on_all_auto():
+    published = render_compose_preview(all_auto=True)
+    queued = render_compose_preview(all_auto=False)
+
+    assert "Veröffentlichen" in published
+    assert "Zur Freigabe" not in published
+    assert "Zur Freigabe" in queued
+    assert "Veröffentlichen" not in queued
+
+
+# -- base.html: nav badge + Termin link ------------------------------------------
+
+
+def test_base_layout_has_the_freigabe_badge_htmx_attributes():
+    html = render_index(Overview(token=None, posts=[]))
+
+    assert 'hx-get="/freigabe/count"' in html
+    assert 'hx-trigger="load"' in html
+    assert "Social Posts" in html
+
+
+def test_termin_link_shows_only_when_the_calendar_context_is_enabled():
+    ov = Overview(token=None, posts=[])
+    enabled = build_templates(ZoneInfo("Europe/Berlin"), calendar_enabled=True)
+
+    with_calendar = enabled.env.get_template("index.html").render(
+        ov=ov,
+        now=NOW,
+        last_run=None,
+        multi_target=False,
+        events="all",
+        event_pills=display.EVENT_PILLS,
+        source="all",
+        source_pills=display.SOURCE_PILLS,
+        channels=make_channels(),
+        review_count=0,
+    )
+    without_calendar = render_index(ov)
+
+    assert "+ Termin" in with_calendar
+    assert "+ Termin" not in without_calendar

@@ -18,9 +18,12 @@ from typing import Self
 
 from diffus.crossposting.domain.entities import (
     AccessToken,
+    ComposeHint,
     Delivery,
+    DeliveryStatus,
     Destination,
     DraftImage,
+    DraftStatus,
     LinkedEvent,
     MediaFile,
     Post,
@@ -30,6 +33,7 @@ from diffus.crossposting.domain.entities import (
 )
 from diffus.crossposting.domain.errors import InvalidImageError
 from diffus.crossposting.domain.ports import (
+    ChannelSettingsRepository,
     DeliveryRepository,
     DraftRepository,
     PostRepository,
@@ -110,6 +114,22 @@ class FakeDeliveries:
                 grouped.setdefault(post_id, []).append(dataclasses.replace(row))
         return grouped
 
+    async def in_review(self) -> dict[str, list[Delivery]]:
+        grouped: dict[str, list[Delivery]] = {}
+        for (post_id, _destination), row in self._rows.items():
+            if row.status == DeliveryStatus.REVIEW:
+                grouped.setdefault(post_id, []).append(dataclasses.replace(row))
+        return grouped
+
+    async def count_posts_in_review(self) -> int:
+        return len(
+            {
+                post_id
+                for (post_id, _dest), row in self._rows.items()
+                if row.status == DeliveryStatus.REVIEW
+            }
+        )
+
 
 class FakeSink:
     def __init__(self, fail: bool = False) -> None:
@@ -125,13 +145,21 @@ class FakeSink:
 class FakeMedia:
     """MediaGateway with no files and an in-memory map of downloadable images."""
 
-    def __init__(self, images: dict[str, bytes] | None = None, fail_images: bool = False) -> None:
+    def __init__(
+        self,
+        images: dict[str, bytes] | None = None,
+        fail_images: bool = False,
+        fail_fetch: bool = False,
+    ) -> None:
         self.images = images or {}
         self.fail_images = fail_images
+        self.fail_fetch = fail_fetch
         self.downloads: list[str] = []
 
     @asynccontextmanager
     async def fetch(self, post: Post) -> AsyncIterator[list[MediaFile]]:
+        if self.fail_fetch:
+            raise RuntimeError("simulated cdn fetch failure")
         yield []
 
     async def download_image(self, url: str) -> tuple[str, bytes] | None:
@@ -199,6 +227,7 @@ class FakeDrafts:
             error=draft.error,
             post_id=draft.post_id,
             published_at=draft.published_at,
+            targets=draft.targets,
         )
         self.dirty = True
 
@@ -219,6 +248,18 @@ class FakeDrafts:
     async def delete(self, draft_id: str) -> None:
         self._drafts.pop(draft_id, None)
         self.dirty = True
+
+    async def in_review(self) -> list[PostDraft]:
+        matches = [
+            d for d in self._drafts.values() if d.status in (DraftStatus.REVIEW, DraftStatus.FAILED)
+        ]
+        matches.sort(key=lambda d: d.created_at)
+        return [dataclasses.replace(d) for d in matches]
+
+    async def count_in_review(self) -> int:
+        return sum(
+            1 for d in self._drafts.values() if d.status in (DraftStatus.REVIEW, DraftStatus.FAILED)
+        )
 
 
 class FakeImageProcessor:
@@ -254,14 +295,39 @@ class FakePublisher:
         return self.post
 
 
+class FakeChannels:
+    def __init__(self, settings: dict[Destination, bool] | None = None) -> None:
+        self._settings: dict[Destination, bool] = dict(settings or {})
+        self.dirty = False
+
+    async def get_all(self) -> dict[Destination, bool]:
+        return dict(self._settings)
+
+    async def set(self, destination: Destination, auto_publish: bool) -> None:
+        self._settings[destination] = auto_publish
+        self.dirty = True
+
+
 class FakeEventDirectory:
     """EventDirectory over a fixed mapping, the way a real calendar-context adapter would answer."""
 
-    def __init__(self, mapping: dict[str, list[LinkedEvent]] | None = None) -> None:
+    def __init__(
+        self,
+        mapping: dict[str, list[LinkedEvent]] | None = None,
+        hints: dict[str, ComposeHint] | None = None,
+    ) -> None:
         self.mapping = mapping or {}
+        self.hints = hints or {}
+        self.links: list[tuple[str, str]] = []
 
     async def for_posts(self, post_ids: Sequence[str]) -> dict[str, list[LinkedEvent]]:
         return {post_id: self.mapping[post_id] for post_id in post_ids if post_id in self.mapping}
+
+    async def compose_hint(self, event_id: str) -> ComposeHint | None:
+        return self.hints.get(event_id)
+
+    async def link(self, event_id: str, post_id: str) -> None:
+        self.links.append((event_id, post_id))
 
 
 class FakeAuth:
@@ -320,6 +386,7 @@ class FakeUnitOfWork:
         previews: FakePreviews | None = None,
         tokens: FakeTokens | None = None,
         drafts: FakeDrafts | None = None,
+        channels: FakeChannels | None = None,
     ) -> None:
         # Kept as concrete types privately so __aexit__/commit/rollback can flip
         # `dirty`; exposed publicly at the Protocol type, like SqlUnitOfWork's
@@ -329,11 +396,13 @@ class FakeUnitOfWork:
         self._previews = previews if previews is not None else FakePreviews()
         self._tokens = tokens if tokens is not None else FakeTokens()
         self._drafts = drafts if drafts is not None else FakeDrafts()
+        self._channels = channels if channels is not None else FakeChannels()
         self.posts: PostRepository = self._posts
         self.deliveries: DeliveryRepository = self._deliveries
         self.previews: PreviewRepository = self._previews
         self.tokens: TokenRepository = self._tokens
         self.drafts: DraftRepository = self._drafts
+        self.channels: ChannelSettingsRepository = self._channels
         self.commits = 0
 
     def __call__(self) -> Self:
@@ -354,6 +423,7 @@ class FakeUnitOfWork:
             or self._previews.dirty
             or self._tokens.dirty
             or self._drafts.dirty
+            or self._channels.dirty
         )
         try:
             if exc_type is None and dirty:
@@ -374,3 +444,4 @@ class FakeUnitOfWork:
         self._previews.dirty = False
         self._tokens.dirty = False
         self._drafts.dirty = False
+        self._channels.dirty = False

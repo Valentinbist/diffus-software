@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 from diffus.calendar.application.calendar_events import EventPostStatus, EventView
 from diffus.calendar.application.suggest_posts import SuggestionReason
-from diffus.calendar.domain.entities import CalendarEvent, InstagramState
+from diffus.calendar.domain.entities import CalendarEvent
 from diffus.shared.presentation.display import MONTHS, WEEKDAYS
 
 
@@ -174,18 +174,3 @@ def reason_label(reason: SuggestionReason) -> str:
         SuggestionReason.TITLE: "Titel passt",
         SuggestionReason.RECENT: "Kurz vor dem Termin gepostet",
     }[reason]
-
-
-def instagram_hint(state: InstagramState) -> str | None:
-    """Why the Instagram checkbox on the compose form is disabled, or None when it isn't."""
-    return {
-        InstagramState.READY: None,
-        InstagramState.NOT_CONNECTED: "Instagram ist nicht verbunden.",
-        InstagramState.NO_PUBLISH_SCOPE: (
-            "Instagram neu verbinden, um Veröffentlichen freizuschalten."
-        ),
-        InstagramState.NO_PUBLIC_URL: (
-            "PUBLIC_BASE_URL ist keine öffentliche https-Adresse – Instagram kann die Bilder "
-            "nicht laden. Telegram geht trotzdem."
-        ),
-    }[state]
