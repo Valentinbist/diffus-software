@@ -1,16 +1,19 @@
 """Formatting shared across bounded contexts: German, human-scale time and text helpers.
 
 Pure functions that take `now` explicitly so they are trivially testable. Wired
-into Jinja as filters by shared/presentation/templates.py.
+into Jinja as filters by shared/presentation/templates.py. `redact` lives in
+`diffus.shared.redact` (a presentation module is the wrong layer for
+infrastructure adapters to depend on) and is re-exported here so `error_text`
+and existing callers/tests keep working unchanged.
 """
 
 from __future__ import annotations
 
-import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from diffus.shared.dates import MONTHS, WEEKDAYS
+from diffus.shared.redact import redact
 
 __all__ = [
     "MONTHS",
@@ -22,16 +25,6 @@ __all__ = [
     "redact",
     "error_text",
 ]
-
-# Error strings come from httpx and quote the request URL, which carries the
-# Instagram access token / Telegram bot token / kalender.digital capability
-# token as part of the path or query.
-_SECRET_PATTERNS = (
-    re.compile(r"(access_token=)[^&\s'\"]+"),
-    re.compile(r"(client_secret=)[^&\s'\"]+"),
-    re.compile(r"(/bot)\d+:[\w-]+"),
-    re.compile(r"(capabilityId=)[^&\s'\"]+"),
-)
 
 
 def format_day(dt: datetime, now: datetime, tz: ZoneInfo) -> str:
@@ -76,12 +69,6 @@ def summary(text: str | None, limit: int = 90) -> str:
     if len(line) <= limit:
         return line
     return line[: limit - 1].rstrip() + "…"
-
-
-def redact(text: str) -> str:
-    for pattern in _SECRET_PATTERNS:
-        text = pattern.sub(r"\1…", text)
-    return text
 
 
 def error_text(text: str | None, limit: int = 160) -> str:

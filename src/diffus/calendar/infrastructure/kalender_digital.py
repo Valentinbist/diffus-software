@@ -10,7 +10,7 @@ behind the same `CalendarGateway` port if this API ever goes away.
 The share-link token (`capabilityId`) is an editor-level credential: anyone
 holding it can edit or delete the whole calendar. Never log request URLs —
 they carry it as a query parameter (see also `_SECRET_PATTERNS` in
-shared/presentation/display.py, which redacts it from rendered error text).
+shared/redact.py, which redacts it from rendered error text).
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import httpx
 
 from diffus.calendar.domain.entities import CalendarEvent, CalendarSnapshot, NewEvent, SubCalendar
 from diffus.calendar.domain.errors import CalendarError
-from diffus.shared.presentation.display import redact
+from diffus.shared.redact import redact
 
 API_BASE = "https://api.kalender.digital"
 FALLBACK_COLOR = "#4C4C4C"

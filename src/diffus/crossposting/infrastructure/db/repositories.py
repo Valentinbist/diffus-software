@@ -290,7 +290,14 @@ class SqlDraftRepository:
         self._s = session
 
     async def add(self, draft: PostDraft) -> None:
+        # Flush the draft row to the database before the media rows: without
+        # an ORM relationship() between PostDraftRow and PostDraftMediaRow,
+        # the unit of work has no dependency info to order two independently
+        # `add`ed objects by, so it does not infer the FK from the tables'
+        # own ForeignKey and may flush post_draft_media first — violating
+        # post_draft_media_draft_id_fkey since post_drafts isn't written yet.
         self._s.add(_draft_to_row(draft))
+        await self._s.flush()
         for index, image in enumerate(draft.images):
             self._s.add(_image_to_row(draft.id, index, image))
 
