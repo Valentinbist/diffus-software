@@ -1,8 +1,10 @@
-# Instagram → Telegram connector
+# diffus.space social posting
 
-Polls one Instagram Business account and fans out new posts to N Telegram chats.
-Single Python process (FastAPI + APScheduler), Postgres for state, HTTP Basic
-auth on every route. Instagram → Telegram is the only pairing wired today; the
+Polls one Instagram Business account and composes posts of its own, then
+publishes both to Telegram and, optionally, back to Instagram — each
+channel either automatically or after a manual Freigabe (approval). Single
+Python process (FastAPI + APScheduler), Postgres for state, HTTP Basic auth
+on every route. Instagram/Telegram is the only pairing wired today; the
 model is source/sink agnostic — see [`docs/architecture.md`](docs/architecture.md)
 for the design, decisions and how to add a sink, a source, or a new bounded
 context.
@@ -42,7 +44,7 @@ context.
 3. Open `http://localhost:8000` (behind Basic auth) and click **Instagram
    verbinden** to complete the OAuth flow. The UI is in German, like the
    diffus.space site it belongs to, and has a **Kalender** page alongside
-   the post feed when `KALENDER_DIGITAL_TOKEN` is set.
+   the Social Posts page when `KALENDER_DIGITAL_TOKEN` is set.
 
 The first sync after connecting only marks existing posts as seen — it never
 blasts your entire history into Telegram. New posts found on later polls are
@@ -54,23 +56,43 @@ click **Instagram verbinden** again once — a token connected under the old,
 narrower scope keeps working for reading, but the compose wizard shows
 "Instagram neu verbinden, um Veröffentlichen freizuschalten." until you do.
 
+## Freigabe (approval queue)
+
+Nothing goes out on its own by default. Every post — one composed in the
+app or one the poll just found on Instagram — waits on **/freigabe**
+("Freigabe" in the header, with a live count badge) until someone approves
+it, per channel:
+
+- A **channel's own auto-publish switch** (Social Posts → **Kanäle**, one
+  checkbox per channel — Instagram and each Telegram chat) skips the queue
+  for that channel. It's off for every channel by default, so switch on the
+  ones that should go out immediately; the rest still queue.
+- A **composed post** is approved as a whole: pick its targets on
+  `/freigabe` and click **Freigeben** (or **Ablehnen** to discard it).
+- A **post the poll found on Instagram** queues per target: approve the
+  Telegram chats it should go to, or reject it outright.
+- A retried delivery (one that already failed once) is never re-queued — it
+  keeps retrying on its own schedule regardless of the switch, since it was
+  already approved.
+
 ## The two wizards
 
-Once the calendar is on, two small wizards connect the calendar and the
-Instagram/Telegram feed:
+- **Post erstellen** (`/posts/new`, or `?event={id}` from an event's page or
+  the calendar toolbar): a caption prefilled from the linked event when
+  there is one (date, time, room, description), up to 10 images, and a
+  choice of targets — Instagram and/or any Telegram chat. If every chosen
+  target is on auto-publish it goes out immediately; otherwise it lands on
+  `/freigabe`. A Telegram-only post becomes a first-class `diffus:<draft
+  id>` post in the feed, exactly like an Instagram one, and — when it was
+  started from an event — is linked back to it automatically.
+- **Termin anlegen** (`/calendar/events/new`, or `?post={id}` from a post's
+  page): prefills a title (the caption's first line) and a date (a mention
+  like "12.9." in the caption, or the posted day otherwise) when started
+  from a post, or blank defaults from the calendar toolbar; writes a new
+  event straight into kalender.digital, linked back to the post if there
+  was one.
 
-- **Post erstellen**, from an event's page: prefills a caption from the
-  event (date, time, room, description), takes up to 10 images, and
-  publishes to Instagram and/or Telegram — a Telegram-only post becomes a
-  first-class `diffus:<draft id>` post in the feed, exactly like an
-  Instagram one.
-- **Termin anlegen**, from a post's page: prefills a title (the caption's
-  first line) and a date (a mention like "12.9." in the caption, or the
-  posted day otherwise), and writes a new event straight into
-  kalender.digital, linked back to the post.
-
-Both are ordinary pages (`/calendar/events/{id}/compose`,
-`/calendar/events/new?post={id}`) that also open as a modal on desktop.
+Both are ordinary pages that also open as a modal on desktop.
 
 ## Dev setup
 

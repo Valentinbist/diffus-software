@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% set active_page = "posts" %}
 
-{% block title %}{{ view.post.caption|summary(60) or "Post" }} – Crossposting{% endblock %}
+{% block title %}{{ view.post.caption|summary(60) or "Post" }} – Social Posts{% endblock %}
 
 {% block content %}
 {% set post = view.post %}

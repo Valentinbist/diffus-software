@@ -466,7 +466,7 @@ async def test_pages_and_resend_work_on_fakes(settings_env):
     ) as client:
         resp = await client.get("/")
         assert resp.status_code == 200
-        assert "Crossposting" in resp.text
+        assert "Social Posts" in resp.text
 
         resp = await client.get("/posts/p1")
         assert resp.status_code == 200

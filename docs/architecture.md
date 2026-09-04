@@ -112,7 +112,39 @@ posts), `PostPublisher` (`options`, `create_draft`, `get_draft`, `publish`,
 `CalendarUnitOfWork` / `CalendarUnitOfWorkFactory` — its own unit of work,
 separate from crossposting's.
 
-## Schema (4 tables, + 2 more in migration `0005`)
+## Freigabe (approval queue)
+
+Nothing is delivered anywhere until it is approved, unless the channel it's
+going to has been switched on. There are two approval units:
+
+- **A draft** (a post composed via `/posts/new`, with or without an event):
+  `SubmitDraft` checks every chosen channel with `all_auto()`; if all of
+  them are on, it calls `PublishDraft` immediately, otherwise it calls
+  `PostDraft.submit_for_review()` (`DRAFT → REVIEW`, storing the chosen
+  `PublishTargets` on the draft) and the draft waits on `/freigabe`.
+  Approving it there (`ApproveDraft`) is the same `PublishDraft` call a
+  ready-to-go draft would have taken immediately — Freigabe changes *when*
+  publishing happens, never *how*.
+- **A polled Instagram post's deliveries**: `SyncPosts` claims a
+  `(post, destination)` pair as usual, but only *delivers* it when that
+  destination is on auto-publish; otherwise `Delivery.queue_for_review()`
+  moves it `PENDING → REVIEW` and it shows up on `/freigabe` grouped by
+  post. `ApprovePostDeliveries` flips the chosen `REVIEW` rows to `PENDING`
+  (`approve()`) and the rest to `SKIPPED` (`reject()`), commits, then
+  delivers the ones it just approved — so a second click on the same post
+  finds nothing left in `REVIEW` and does nothing.
+
+A **channel's own switch** (`channel_settings.auto_publish`, one row per
+`Destination`, default off) is what lets either of those skip the queue.
+Only a *fresh* claim consults it: `SyncPosts` never re-queues a delivery
+that already failed once and is being retried — a `FAILED` row was already
+approved (or auto-sent) the first time, so a retry always attempts delivery
+regardless of the switch. `Delivery.can_retry()` is unaffected by any of
+this; a `REVIEW` row is never `FAILED`, so the poller's own retry loop never
+touches it — only a human (via `/freigabe`, with the header's live count
+badge from `GET /freigabe/count`) or a switch flip moves it on.
+
+## Schema (4 tables, + 2 more in migration `0005`, + 1 more and 2 columns in `0006`)
 
 ```sql
 tokens      (source PK, access_token, external_user_id, expires_at, refreshed_at, scopes)
@@ -129,10 +161,11 @@ string of the OAuth scopes the stored token actually carries; a token
 connected before the publish scope existed has `scopes = ""` and needs a
 one-time re-connect (`Token.can_publish`).
 
-### Drafts (migration `0005`)
+### Drafts (migration `0005`, extended in `0006`)
 
 ```sql
-post_drafts       (id PK, caption, public_key, status, error, post_id, created_at, published_at)
+post_drafts       (id PK, caption, public_key, status, error, post_id, created_at, published_at,
+                    targets JSONB, event_ref)  -- targets/event_ref added in 0006
 post_draft_media  (draft_id FK post_drafts.id ON DELETE CASCADE, media_index,
                     content_type, width, height, data)  PRIMARY KEY (draft_id, media_index)
 ```
@@ -144,7 +177,24 @@ storage, `post_draft_media` one row per image. `post_drafts.post_id` carries
 no foreign key on purpose: the `posts` row is only created once publishing
 succeeds, well after the draft exists, and the draft is kept afterwards as an
 audit trail that outlives the row it produced — see Sharp edges, "drafts are
-never purged."
+never purged." `targets` (JSONB: `{"instagram": bool, "destinations": [...]}`)
+is set once a draft is submitted for review or published, so the Freigabe page
+can re-render the chosen channels; `event_ref` (`"calendar:<event id>"` or
+null) is how `PublishDraft` finds the event to link back to once publishing
+succeeds — see "Freigabe (approval queue)" below.
+
+### Channels (migration `0006`)
+
+```sql
+channel_settings  (destination PK, auto_publish)
+```
+
+One row per channel — `Destination`'s text form (`"instagram:account"`,
+`"telegram:-100…"`) as the primary key — holding whether that channel skips
+the Freigabe queue. No row means `auto_publish = false`: the table starts
+empty, so every channel queues until someone explicitly switches it on.
+Migration `0006` also adds `ix_deliveries_status`, an index the Freigabe
+page's `in_review()` queries lean on.
 
 ### Calendar schema (4 more tables, migration `0004`)
 
@@ -193,14 +243,17 @@ src/diffus/
   crossposting/                  # first bounded context — poll a source, fan out, show what happened
     domain/                      # entities, value objects, ports, errors — stdlib only
     application/                 # use cases; depend only on domain
-      sync_posts.py               #   poll → upsert + previews → claim → DeliverPost, per destination
+      sync_posts.py               #   poll → upsert + previews → claim/queue_for_review → DeliverPost
       deliver.py                  #   DeliverPost: sink registry lookup, deliver, record, commit
       sync_job.py                 #   SyncJob: refresh token, then sync, under one lock; LastRun for the UI
       resend_delivery.py, refresh_token.py, connect_instagram.py
       overview.py, post_detail.py, preview.py     # read side
-      drafts.py                   #   CreateDraft, GetDraft, DiscardDraft, GetDraftImage
-      publish_draft.py            #   PublishDraft: the compose wizard's publish step (see Sharp edges)
-      publish_readiness.py        #   GetPublishReadiness: feeds calendar's PublishOptions + the IG hint
+      drafts.py                   #   CreateDraft, SubmitDraft, ApproveDraft, GetDraft, DiscardDraft, GetDraftImage
+      publish_draft.py            #   PublishDraft: publishes a draft — the wizard's immediate path and
+                                   #   ApproveDraft's Freigabe path both end here (see Sharp edges)
+      channels.py                 #   GetChannels, SetAutoPublish, all_auto() — the Freigabe on/off switches
+      review.py                   #   GetReviewQueue, CountReview, ApprovePostDeliveries, RejectPostDeliveries
+                                   #   — the Freigabe page's read and approve/reject side
       draft_media.py               #   DraftMediaGateway: a draft's own bytes as a MediaGateway for Telegram
     infrastructure/
       db/                         # models (Base from shared), repositories (session-bound), uow.py
@@ -208,16 +261,19 @@ src/diffus/
       telegram/                   # render (HTML captions) + sink (PostSink)
       media/
         downloader.py              #   CDN download to tempdir → MediaFile
+        fallback.py                 #   FallbackMediaGateway: CDN first, a draft's stored preview stills when
+                                     #   the CDN link has died by the time a queued post is approved
         images.py                  #   PillowImageProcessor: ImageProcessor, upload → normalised JPEG
-      calendar.py                  #   CalendarEventDirectory: EventDirectory over the calendar's read use cases
+      calendar.py                  #   CalendarEventDirectory: EventDirectory over the calendar's read use
+                                    #   cases and, for `.link()`, its LinkEventPost command
     presentation/
       services.py                 # typed Services dataclass handed to routes via Depends
-      routes.py, display.py, templates/            # context-specific filters + templates
+      routes.py, display.py, templates/            # context-specific filters + templates; includes the
+                                                     #   compose wizard (/posts/new) and the Freigabe page
   calendar/                       # second bounded context — sync a shared external calendar,
                                   #   link events to posts, show what's covered and what isn't
     domain/                      # entities (SubCalendar, CalendarEvent, EventLink, LinkablePost, NewEvent,
-                                  #   DraftRef, DraftPreview, TelegramTarget, PublishOptions, PublishedPost),
-                                  #   ports (CalendarGateway, PostCatalog, PostPublisher, repositories,
+                                  #   ComposeHint), ports (CalendarGateway, PostCatalog, repositories,
                                   #   UnitOfWork), errors
     application/
       sync_calendar.py, sync_job.py                # SyncCalendar + CalendarSyncJob, mirrors crossposting's
@@ -225,20 +281,25 @@ src/diffus/
       link_event_post.py, link_picker.py            # link/unlink a post to an event, and the reverse picker
       linked_events.py                              # GetLinkedEvents: crossposting's EventDirectory reads this
       suggest_posts.py, caption_dates.py             # the link-picker's scoring heuristic; pure, stdlib only
-      compose_post.py                               # ComposePostForEvent: the event → post wizard
-      create_event.py                               # CreateEventForPost: the post → event wizard
+      compose_post.py                               # caption_for_event + GetComposeHint: the caption prefill
+                                                      #   crossposting's compose wizard offers for an event
+                                                      #   (the wizard itself moved to crossposting; see below)
+      create_event.py                               # CreateEventForPost: the post → event wizard, and the
+                                                      #   standalone "Termin anlegen" form (post_id optional)
     infrastructure/
       db/                          # models (Base from shared), repositories, uow.py — mirrors crossposting's
       kalender_digital.py          # KalenderDigitalClient: CalendarGateway (incl. create_event) over
                                     #   kalender.digital's JSON API
-      crossposting.py              # CrosspostingPostCatalog: PostCatalog over crossposting's read use cases;
-                                    #   CrosspostingPublisher: PostPublisher over its drafting/publishing commands
+      crossposting.py              # CrosspostingPostCatalog: PostCatalog over crossposting's read use cases
+                                    #   — the only cross-context adapter left on this side; the command
+                                    #   direction (CrosspostingPublisher) was removed once the compose
+                                    #   wizard moved into crossposting itself
     presentation/
       services.py, routes.py, display.py
-      templates/                   # calendar.html, event.html, link.html, compose.html, compose_preview.html,
-                                    #   new_event.html
+      templates/                   # calendar.html, event.html, link.html, new_event.html — no compose
+                                    #   templates here any more, see crossposting/presentation/templates/
 alembic/                          # 0001 initial, 0002 previews, 0003 destinations and sources, 0004 calendar,
-                                   #   0005 drafts and scopes
+                                   #   0005 drafts and scopes, 0006 Freigabe and channels
 ```
 
 ## Conventions
@@ -284,14 +345,20 @@ rules that govern every context from here on:
    the unit of work's `commit()` come when two contexts need to react to each
    other. Exception, decided 2026-09-03, **extended 2026-09-04**: an adapter
    in a context's `infrastructure/` may call another context's
-   `application/` use cases — reads *and*, since the compose/publish
-   wizard, **commands** too — because the application layer of a context is
-   its public API. It now runs both ways:
-   `calendar/infrastructure/crossposting.py::CrosspostingPostCatalog` reads
-   crossposting's posts, and its `CrosspostingPublisher` drives
-   crossposting's `CreateDraft`/`PublishDraft`/`DiscardDraft` *commands*;
+   `application/` use cases — reads *and* commands too — because the
+   application layer of a context is its public API. It runs both ways, but
+   asymmetrically, because the compose wizard now lives entirely in
+   crossposting rather than being driven from the calendar:
+   `calendar/infrastructure/crossposting.py::CrosspostingPostCatalog` is a
+   **read-only** adapter over crossposting's `GetOverview`/`GetPostDetail`
+   (calendar → crossposting, reads only — the calendar-side
+   `CrosspostingPublisher` that used to drive crossposting's drafting
+   commands was removed once the wizard moved);
    `crossposting/infrastructure/calendar.py::CalendarEventDirectory` reads
-   the calendar's linked events the other way round.
+   the calendar's linked events **and** issues one command the other way,
+   `.link(event_id, post_id)` over the calendar's `LinkEventPost`, so a post
+   published from `/posts/new?event=<id>` links itself back to that event
+   without crossposting ever importing the calendar's domain.
 4. One FastAPI app, one Alembic history, one `Services` per context mounted
    under its own router prefix.
 
@@ -368,11 +435,22 @@ instead, behind the normal Basic auth.
   scope existed needs **one re-connect** (`Token.can_publish` is false until
   then, and the compose form disables the Instagram checkbox with a German
   hint instead of failing at publish time).
-- `PublishDraft` runs under `SyncJob.lock` — the same lock the crossposting
-  poller takes for its own tick — so the poller can never run between
-  Instagram's `media_publish` call and this use case's own `posts.upsert` +
-  delivery rows; see `publish_draft.py`'s module docstring for the full
-  three-plus-one argument against a duplicate Telegram send.
+- `PublishDraft` and `ApprovePostDeliveries` both run under `SyncJob.lock` —
+  the same lock the crossposting poller takes for its own tick — so neither
+  a wizard publish nor a Freigabe approval can race the poller (or each
+  other, for a double-clicked "Freigeben"). For `PublishDraft` this closes
+  the window between Instagram's `media_publish` call and this use case's
+  own `posts.upsert` + delivery rows; see `publish_draft.py`'s module
+  docstring for the full three-plus-one argument against a duplicate
+  Telegram send. For `ApprovePostDeliveries`, the lock makes a second
+  "Freigeben" click on the same post a no-op: by the time it runs, the
+  first click has already moved every `REVIEW` row off that status.
+- A **queued post approved days later** may find its Instagram CDN links
+  already dead — `FallbackMediaGateway` (the only `MediaGateway` the app
+  uses now) serves the still image stored at sync time instead when the CDN
+  fetch fails, so a video that sat in Freigabe long enough is delivered as
+  its still frame, not the original clip; see the module's own docstring
+  for why that's the right trade-off and when it gives up outright.
 - **Drafts are never purged.** `post_drafts`/`post_draft_media` keep growing;
   a published draft is kept as the audit trail of what was uploaded and
   when, and a discarded/failed one is kept too unless a human calls
