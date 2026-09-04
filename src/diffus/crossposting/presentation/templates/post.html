@@ -38,13 +38,18 @@
   {% endfor %}
   <div class="actions">
     <a class="btn" href="/calendar/link?post={{ post.id }}" data-modal>Mit Termin verknüpfen</a>
-    <a class="btn" href="/calendar/events/new?post={{ post.id }}" data-modal>Termin anlegen</a>
+    <a class="btn" href="/neu?post={{ post.id }}" data-modal>Termin anlegen</a>
   </div>
 </section>
 {% endif %}
 
 <section class="details">
-  <p class="eyebrow">Zustellung</p>
+  <p class="eyebrow">Kanäle</p>
+  {% if post.source == "instagram" %}
+  <div class="delivery">
+    <p class="body">Instagram ✓ · <a href="{{ post.permalink }}" target="_blank" rel="noopener">Auf Instagram öffnen</a></p>
+  </div>
+  {% endif %}
   {% for d in view.deliveries|sort(attribute="destination") %}
   <div class="delivery">
     <p class="body">{{ d|delivery_label(multi_target) }}</p>

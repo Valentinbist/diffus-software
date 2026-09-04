@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time
+
+import pytest
 
 from diffus.crossposting.application.overview import GetOverview, NoEvents
 from diffus.crossposting.application.post_detail import GetPostDetail
@@ -13,9 +15,11 @@ from diffus.crossposting.domain.entities import (
     LinkedEvent,
     MediaItem,
     MediaType,
+    NewEventRequest,
     Post,
     Preview,
 )
+from diffus.crossposting.domain.errors import EventCreationError
 from tests.crossposting.fakes import FakeEventDirectory, FakeUnitOfWork
 
 
@@ -98,6 +102,28 @@ async def test_overview_defaults_to_no_events_when_the_calendar_is_disabled():
     result = await overview.run()
 
     assert all(view.events == [] for view in result.posts)
+
+
+async def test_no_events_event_form_is_none_when_the_calendar_is_disabled():
+    assert await NoEvents().event_form(None) is None
+    assert await NoEvents().event_form("p1") is None
+
+
+async def test_no_events_create_event_raises_when_the_calendar_is_disabled():
+    request = NewEventRequest(
+        title="Plenum",
+        day=date(2026, 9, 10),
+        start=time(18, 0),
+        end=time(20, 0),
+        whole_day=False,
+        description="",
+        location="",
+        who="",
+        sub_calendar_ids=frozenset(),
+    )
+
+    with pytest.raises(EventCreationError, match="Kalender ist nicht eingerichtet."):
+        await NoEvents().create_event(request, "p1")
 
 
 async def test_detail_attaches_linked_events_from_the_event_directory():

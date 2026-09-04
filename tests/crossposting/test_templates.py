@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from diffus.crossposting.application.channels import Channels, InstagramChannel, TelegramChannel
@@ -21,18 +21,27 @@ from diffus.crossposting.domain.entities import (
     LinkedEvent,
     MediaItem,
     MediaType,
+    NewEventRequest,
     Post,
     PostDraft,
     PublishTargets,
+    SubCalendarOption,
     Token,
 )
 from diffus.crossposting.presentation import display
 from diffus.crossposting.presentation.routes import build_templates
 
 templates = build_templates(ZoneInfo("Europe/Berlin"))
+# wizard_event.html (step 1) only ever renders with the calendar on — /neu
+# redirects away otherwise — so its own tests use this one instead of the
+# bare `templates` above (calendar_enabled=False).
+templates_enabled = build_templates(ZoneInfo("Europe/Berlin"), calendar_enabled=True)
 
 NOW = datetime(2026, 9, 3, 10, 0, tzinfo=UTC)  # 12:00 in Berlin
 C1 = Destination("telegram", "c1")
+SUB_CALENDAR_OPTION = SubCalendarOption(
+    id=5298948, name="Öffentliche Veranstaltung", color="#9BBB59"
+)
 
 
 def make_channels(
@@ -71,6 +80,7 @@ def make_post(
     caption: str | None = "Siebdruck-Nachmittag, offen für alle",
     cover: bool = True,
     extra_image: bool = False,
+    source: str = "instagram",
 ) -> Post:
     media = [
         MediaItem(
@@ -83,7 +93,7 @@ def make_post(
         media.append(MediaItem(url="https://cdn.example.com/p1-2.jpg", type=MediaType.IMAGE))
     return Post(
         id="p1",
-        source="instagram",
+        source=source,
         caption=caption,
         permalink="https://instagram.com/p/p1/",
         media=tuple(media),
@@ -128,6 +138,14 @@ def render_review(
     )
 
 
+def render_setup(
+    ov: Overview, last_run: LastRun | None = None, channels: Channels | None = None
+) -> str:
+    return templates.env.get_template("setup.html").render(
+        ov=ov, now=NOW, last_run=last_run, channels=channels or make_channels()
+    )
+
+
 def render_compose(
     caption: str = "",
     hint: ComposeHint | None = None,
@@ -135,8 +153,10 @@ def render_compose(
     channels: Channels | None = None,
     error: str | None = None,
     cancel_url: str = "/",
+    enabled: bool = False,
 ) -> str:
-    return templates.env.get_template("compose.html").render(
+    env = templates_enabled if enabled else templates
+    return env.env.get_template("compose.html").render(
         caption=caption,
         hint=hint,
         event=event,
@@ -161,9 +181,11 @@ def render_compose_preview(
     telegram: list[str] | None = None,
     all_auto: bool = False,
     error: str | None = None,
+    enabled: bool = False,
 ) -> str:
     draft = draft or make_draft()
-    return templates.env.get_template("compose_preview.html").render(
+    env = templates_enabled if enabled else templates
+    return env.env.get_template("compose_preview.html").render(
         draft=draft,
         image_urls=tuple(f"/drafts/{draft.id}/media/{i}" for i in range(len(draft.images))),
         hint=hint,
@@ -176,6 +198,49 @@ def render_compose_preview(
     )
 
 
+def make_prefill(
+    title: str = "Fest",
+    day: date = date(2026, 9, 12),
+    start: time = time(18, 0),
+    end: time = time(22, 0),
+    whole_day: bool = False,
+    description: str = "Text",
+    location: str = "Ort",
+    who: str = "Jona",
+    sub_calendar_ids: frozenset[int] = frozenset({SUB_CALENDAR_OPTION.id}),
+) -> NewEventRequest:
+    return NewEventRequest(
+        title=title,
+        day=day,
+        start=start,
+        end=end,
+        whole_day=whole_day,
+        description=description,
+        location=location,
+        who=who,
+        sub_calendar_ids=sub_calendar_ids,
+    )
+
+
+def render_wizard_event(
+    prefill: NewEventRequest | None = None,
+    sub_calendars: tuple[SubCalendarOption, ...] = (SUB_CALENDAR_OPTION,),
+    post_id: str | None = None,
+    view: PostView | None = None,
+    error: str | None = None,
+    enabled: bool = True,
+) -> str:
+    env = templates_enabled if enabled else templates
+    return env.env.get_template("wizard_event.html").render(
+        prefill=prefill or make_prefill(),
+        sub_calendars=sub_calendars,
+        post_id=post_id,
+        view=view,
+        error=error,
+        now=NOW,
+    )
+
+
 def connected(*views: PostView) -> Overview:
     return Overview(token=make_token(), posts=list(views))
 
@@ -183,41 +248,68 @@ def connected(*views: PostView) -> Overview:
 # -- overview -----------------------------------------------------------------
 
 
-def test_not_connected_offers_to_connect():
+def test_not_connected_shows_an_attention_line_pointing_to_setup():
     html = render_index(Overview(token=None, posts=[]))
 
-    assert "Instagram verbinden" in html
-    assert 'href="/oauth/login"' in html
+    assert "Instagram ist nicht verbunden" in html
+    assert 'href="/freigabe/setup">Einrichtung</a>' in html
     assert "Noch keine Posts" in html
     assert "Jetzt abgleichen" not in html
+    assert "Instagram verbinden" not in html
 
 
-def test_connected_shows_the_last_sync_and_a_sync_button():
+def test_connected_shows_the_last_sync_status_without_setup_buttons():
     html = render_index(connected(), last_run=LastRun(at=NOW - timedelta(minutes=4)))
 
     assert "Läuft. Letzter Abgleich vor 4 Minuten." in html
-    assert "Jetzt abgleichen" in html
+    assert "Jetzt abgleichen" not in html
     assert "Neu verbinden" not in html
 
 
-def test_connected_without_publish_scope_shows_the_reconnect_hint():
+def test_connected_without_publish_scope_shows_the_attention_line():
     html = render_index(Overview(token=make_token(can_publish=False), posts=[]))
 
-    assert "Instagram neu verbinden, um Veröffentlichen freizuschalten." in html
-    assert "Neu verbinden" in html
+    assert "Instagram neu verbinden, um Veröffentlichen freizuschalten" in html
+    assert 'href="/freigabe/setup">Einrichtung</a>' in html
+    assert "Neu verbinden" not in html
 
 
-def test_failed_sync_and_expiring_token_are_called_out():
+def test_failed_sync_is_called_out():
     html = render_index(
-        Overview(token=make_token(days_left=3), posts=[]),
-        last_run=LastRun(at=NOW - timedelta(minutes=1), sync_error="boom", refresh_error="nope"),
+        Overview(token=make_token(days_left=40), posts=[]),
+        last_run=LastRun(at=NOW - timedelta(minutes=1), sync_error="boom"),
     )
 
     assert "ist fehlgeschlagen" in html
     assert "boom" in html
+
+
+def test_refresh_failure_shows_the_attention_line():
+    html = render_index(
+        Overview(token=make_token(days_left=40), posts=[]),
+        last_run=LastRun(at=NOW - timedelta(minutes=1), refresh_error="nope"),
+    )
+
     assert "Token-Auffrischung fehlgeschlagen" in html
+    assert 'href="/freigabe/setup">Einrichtung</a>' in html
+
+
+def test_expiring_token_shows_the_attention_line():
+    html = render_index(Overview(token=make_token(days_left=3), posts=[]))
+
     assert "in 3 Tagen" in html
-    assert "Neu verbinden" in html
+    assert 'href="/freigabe/setup">Einrichtung</a>' in html
+
+
+def test_only_one_attention_line_shows_when_several_conditions_apply():
+    html = render_index(
+        Overview(token=make_token(days_left=3), posts=[]),
+        last_run=LastRun(at=NOW - timedelta(minutes=1), refresh_error="nope"),
+    )
+
+    assert html.count('href="/freigabe/setup">Einrichtung</a>') == 1
+    assert "Token-Auffrischung fehlgeschlagen" in html
+    assert "in 3 Tagen" not in html
 
 
 def test_delivered_post_row_links_to_the_detail_page_with_the_stored_preview():
@@ -232,8 +324,24 @@ def test_delivered_post_row_links_to_the_detail_page_with_the_stored_preview():
     assert 'src="/posts/p1/media/0"' in html
     assert "cdn.example.com" not in html  # never hotlink when a stored copy exists
     assert "Siebdruck-Nachmittag, offen für alle" in html
-    assert "Heute, 10:00 – Telegram ✓" in html
+    assert "Heute, 10:00" in html
+    assert "Telegram ✓" in html
     assert "Nochmal senden" not in html
+
+
+def test_index_row_shows_the_instagram_origin_line_linking_to_the_permalink():
+    html = render_index(connected(PostView(post=make_post(), deliveries=[])))
+
+    assert (
+        'href="https://instagram.com/p/p1/" target="_blank" rel="noopener">Instagram ✓</a>'
+        in html
+    )
+
+
+def test_index_row_has_no_instagram_origin_line_for_an_app_post():
+    html = render_index(connected(PostView(post=make_post(source="diffus"), deliveries=[])))
+
+    assert "Instagram ✓" not in html
 
 
 def test_row_without_a_stored_preview_falls_back_to_the_cdn_then_to_a_placeholder():
@@ -345,6 +453,22 @@ def test_detail_page_without_deliveries_says_so():
 
     assert "Ohne Text" in html
     assert "Noch an keinen Kanal zugestellt." in html
+
+
+def test_post_detail_renames_the_zustellung_eyebrow_to_kanaele():
+    html = render_post(PostView(post=make_post(), deliveries=[]))
+
+    assert "Kanäle" in html
+    assert "Zustellung" not in html
+
+
+def test_post_detail_shows_the_instagram_origin_line_only_for_an_instagram_post():
+    ig_html = render_post(PostView(post=make_post(), deliveries=[]))
+    app_html = render_post(PostView(post=make_post(source="diffus"), deliveries=[]))
+
+    assert "Instagram ✓ · " in ig_html
+    assert "Auf Instagram öffnen" in ig_html
+    assert "Instagram ✓ · " not in app_html
 
 
 # -- nav + header + modal --------------------------------------------------------
@@ -495,29 +619,87 @@ def test_review_notice_shows_only_when_the_count_is_positive():
     assert "3 Posts warten auf Freigabe." in three
 
 
-def test_kanaele_form_checkbox_uses_the_destination_text_form():
+def test_index_no_longer_shows_the_kanaele_switches():
+    html = render_index(Overview(token=None, posts=[]))
+
+    assert 'name="auto"' not in html
+    assert "Ohne Haken wartet ein Post für diesen Kanal auf Freigabe." not in html
+
+
+def test_neu_button_opens_the_wizard_in_a_modal():
+    html = render_index(Overview(token=None, posts=[]))
+
+    assert 'href="/neu" data-modal>Neu</a>' in html
+
+
+# -- setup page ---------------------------------------------------------------
+
+
+def test_setup_page_has_the_instagram_kanaele_and_veroeffentlichung_sections():
+    html = render_setup(Overview(token=None, posts=[]))
+
+    assert "<h1 class=\"h1\">Einrichtung</h1>" in html
+    assert '<p class="eyebrow">Instagram</p>' in html
+    assert '<p class="eyebrow">Kanäle</p>' in html
+    assert '<p class="eyebrow">Veröffentlichung</p>' in html
+
+
+def test_setup_page_pills_show_einrichtung_current_and_link_back_to_the_queue():
+    html = render_setup(Overview(token=None, posts=[]))
+
+    assert '<a class="pill" href="/freigabe">Warteschlange</a>' in html
+    assert '<span class="pill current">Einrichtung</span>' in html
+
+
+def test_setup_page_kanaele_form_checkbox_uses_the_destination_text_form():
     channels = make_channels(
         telegram=(TelegramChannel(destination=C1, label="Telegram", auto_publish=True),)
     )
 
-    html = render_index(Overview(token=None, posts=[]), channels=channels)
+    html = render_setup(Overview(token=None, posts=[]), channels=channels)
 
     assert 'name="auto" value="telegram:c1" checked' in html
+    assert 'action="/channels"' in html
     assert "Ohne Haken wartet ein Post für diesen Kanal auf Freigabe." in html
 
 
-def test_kanaele_form_shows_the_instagram_hint_when_not_ready():
+def test_setup_page_kanaele_form_shows_the_instagram_hint_when_not_ready():
     channels = make_channels(instagram_connected=False)
 
-    html = render_index(Overview(token=None, posts=[]), channels=channels)
+    html = render_setup(Overview(token=None, posts=[]), channels=channels)
 
     assert "Instagram ist nicht verbunden." in html
 
 
-def test_post_erstellen_button_opens_the_compose_wizard_in_a_modal():
-    html = render_index(Overview(token=None, posts=[]))
+def test_setup_page_offers_to_connect_when_instagram_is_not_connected():
+    html = render_setup(Overview(token=None, posts=[]))
 
-    assert 'href="/posts/new" data-modal>Post erstellen</a>' in html
+    assert "Instagram verbinden" in html
+    assert 'href="/oauth/login"' in html
+
+
+def test_setup_page_sync_form_carries_next_back_to_setup():
+    html = render_setup(connected(), last_run=LastRun(at=NOW - timedelta(minutes=4)))
+
+    assert "Jetzt abgleichen" in html
+    assert 'name="next" value="/freigabe/setup"' in html
+
+
+def test_setup_page_offers_to_reconnect_when_the_token_is_expiring():
+    html = render_setup(Overview(token=make_token(days_left=3), posts=[]))
+
+    assert "in 3 Tagen" in html
+    assert "Neu verbinden" in html
+
+
+def test_setup_page_shows_the_public_base_url_readiness_hint():
+    ready = render_setup(Overview(token=None, posts=[]), channels=make_channels())
+    not_ready = render_setup(
+        Overview(token=None, posts=[]), channels=make_channels(instagram_public_https=False)
+    )
+
+    assert "PUBLIC_BASE_URL ist keine öffentliche https-Adresse" not in ready
+    assert "PUBLIC_BASE_URL ist keine öffentliche https-Adresse" in not_ready
 
 
 # -- post detail: Freigabe + Instagram delivery + SKIPPED wording ----------------
@@ -561,6 +743,13 @@ def test_review_page_empty_state():
     assert "Nichts wartet auf Freigabe." in html
 
 
+def test_review_page_pills_show_warteschlange_current_and_link_to_setup():
+    html = render_review(ReviewQueue(drafts=[], posts=[]))
+
+    assert '<span class="pill current">Warteschlange</span>' in html
+    assert '<a class="pill" href="/freigabe/setup">Einrichtung</a>' in html
+
+
 def test_review_page_draft_block_shows_hint_targets_and_a_failed_error():
     draft = PostDraft.new(
         caption="Hallo Welt",
@@ -594,6 +783,18 @@ def test_review_page_post_block_lists_proposed_destinations():
     assert f'action="/freigabe/posts/{view.post.id}/approve"' in html
     assert f'action="/freigabe/posts/{view.post.id}/reject"' in html
     assert 'name="telegram" value="c1" checked' in html
+
+
+def test_review_page_post_block_shows_the_instagram_origin_line_under_the_caption():
+    view = PostView(post=make_post(), deliveries=[])
+    review = PostReview(view=view, proposed=[C1])
+
+    html = render_review(ReviewQueue(drafts=[], posts=[review]))
+
+    assert (
+        'href="https://instagram.com/p/p1/" target="_blank" rel="noopener">Instagram ✓</a>'
+        in html
+    )
 
 
 # -- compose wizard templates --------------------------------------------------------
@@ -630,6 +831,94 @@ def test_compose_preview_button_label_depends_on_all_auto():
     assert "Veröffentlichen" not in queued
 
 
+def test_compose_offers_ohne_post_fertig_only_with_an_event():
+    hint = ComposeHint(event_id="e1", title="Plenum", caption="x", detail_url="/calendar/events/e1")
+
+    with_event = render_compose(hint=hint, event="e1", cancel_url=hint.detail_url)
+    without_event = render_compose()
+
+    assert 'href="/calendar/events/e1">Ohne Post fertig</a>' in with_event
+    assert "Ohne Post fertig" not in without_event
+
+
+# -- the wizard: step indicator and the Termin step (wizard_event.html) -----------
+
+
+def test_step_indicator_marks_the_current_step_on_all_three_wizard_pages():
+    step1 = render_wizard_event()
+    step2 = render_compose(enabled=True)
+    step3 = render_compose_preview(enabled=True)
+
+    assert '<span class="current">1 Termin</span>' in step1
+    assert "2 Post" in step1
+    assert "3 Vorschau" in step1
+    assert '<span class="current">2 Post</span>' in step2
+    assert '<span class="current">3 Vorschau</span>' in step3
+
+
+def test_step_indicator_omits_termin_and_renumbers_when_the_calendar_is_off():
+    html = templates.env.get_template("compose.html").render(
+        caption="",
+        hint=None,
+        event="",
+        channels=make_channels(),
+        error=None,
+        now=NOW,
+        cancel_url="/",
+    )
+
+    assert "Termin" not in html
+    assert '<span class="current">1 Post</span>' in html
+    assert "2 Vorschau" in html
+
+
+def test_wizard_event_shows_the_prefilled_fields_and_sub_calendar_checkboxes():
+    html = render_wizard_event(make_prefill())
+
+    assert 'value="Fest"' in html
+    assert 'value="2026-09-12"' in html
+    assert 'value="18:00"' in html
+    assert 'value="22:00"' in html
+    assert 'value="Ort"' in html
+    assert 'value="Jona"' in html
+    assert SUB_CALENDAR_OPTION.name in html
+    assert "checked" in html
+
+
+def test_wizard_event_offers_ohne_termin_weiter_only_without_a_post():
+    without_post = render_wizard_event(post_id=None)
+    with_post = render_wizard_event(post_id="p1")
+
+    assert 'href="/posts/new">Ohne Termin weiter</a>' in without_post
+    assert "Ohne Termin weiter" not in with_post
+
+
+def test_wizard_event_shows_the_post_header_only_when_a_post_is_given():
+    view = PostView(post=make_post(), deliveries=[])
+
+    with_post = render_wizard_event(post_id="p1", view=view)
+    without_post = render_wizard_event(post_id=None, view=None)
+
+    assert "Siebdruck-Nachmittag, offen für alle" in with_post
+    assert 'href="/posts/p1"' in with_post
+    assert "Siebdruck-Nachmittag" not in without_post
+
+
+def test_wizard_event_kicker_goes_back_to_the_post_when_one_is_given():
+    with_post = render_wizard_event(post_id="p1")
+    without_post = render_wizard_event(post_id=None)
+
+    assert '<a class="plain back" href="/posts/p1">« Abbrechen</a>' in with_post
+    assert '<a class="plain back" href="/">« Abbrechen</a>' in without_post
+
+
+def test_wizard_event_shows_an_error_notice():
+    html = render_wizard_event(error="Das Ende muss nach dem Beginn liegen.")
+
+    assert '<div class="notice">' in html
+    assert "Das Ende muss nach dem Beginn liegen." in html
+
+
 # -- base.html: nav badge + Termin link ------------------------------------------
 
 
@@ -641,7 +930,7 @@ def test_base_layout_has_the_freigabe_badge_htmx_attributes():
     assert "Social Posts" in html
 
 
-def test_termin_link_shows_only_when_the_calendar_context_is_enabled():
+def test_neu_link_shows_always_regardless_of_the_calendar_context():
     ov = Overview(token=None, posts=[])
     enabled = build_templates(ZoneInfo("Europe/Berlin"), calendar_enabled=True)
 
@@ -659,5 +948,7 @@ def test_termin_link_shows_only_when_the_calendar_context_is_enabled():
     )
     without_calendar = render_index(ov)
 
-    assert "+ Termin" in with_calendar
+    assert 'href="/neu" data-modal>+ Neu</a>' in with_calendar
+    assert 'href="/neu" data-modal>+ Neu</a>' in without_calendar
+    assert "+ Termin" not in with_calendar
     assert "+ Termin" not in without_calendar

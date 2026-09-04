@@ -5,7 +5,16 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from diffus.crossposting.domain.entities import ComposeHint, Delivery, LinkedEvent, Post, Token
+from diffus.crossposting.domain.entities import (
+    ComposeHint,
+    Delivery,
+    EventFormOptions,
+    LinkedEvent,
+    NewEventRequest,
+    Post,
+    Token,
+)
+from diffus.crossposting.domain.errors import EventCreationError
 from diffus.crossposting.domain.ports import EventDirectory, UnitOfWorkFactory
 
 
@@ -36,6 +45,12 @@ class NoEvents:
 
     async def link(self, event_id: str, post_id: str) -> None:
         pass
+
+    async def event_form(self, post_id: str | None) -> EventFormOptions | None:
+        return None
+
+    async def create_event(self, request: NewEventRequest, post_id: str | None) -> LinkedEvent:
+        raise EventCreationError("Kalender ist nicht eingerichtet.")
 
 
 @dataclass

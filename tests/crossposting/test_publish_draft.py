@@ -357,6 +357,12 @@ class _RaisingEventDirectory:
     async def link(self, event_id, post_id):
         raise RuntimeError("calendar is down")
 
+    async def event_form(self, post_id):
+        return None
+
+    async def create_event(self, request, post_id):
+        raise RuntimeError("calendar is down")
+
 
 async def test_a_failed_event_link_is_logged_but_the_post_still_publishes(caplog):
     draft = make_draft(images=1)

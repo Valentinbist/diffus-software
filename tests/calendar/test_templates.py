@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from diffus.calendar.application.calendar_events import CalendarPage, EventPostStatus, EventView
-from diffus.calendar.application.create_event import EventForm
 from diffus.calendar.application.event_detail import EventDetail, SuggestedPost
 from diffus.calendar.application.link_picker import LinkPicker, LinkPickerEvent
 from diffus.calendar.application.suggest_posts import SuggestionReason
@@ -120,7 +119,7 @@ def test_agenda_view_shows_the_day_heading_time_sub_calendar_dot_and_post_status
     # Jinja autoescapes "&" to "&amp;" in attribute values, as valid HTML requires.
     assert 'href="/calendar?view=month&amp;cal=5298948">Monat' in html
     assert "Jetzt abgleichen" in html
-    assert 'href="/calendar/events/new" data-modal>Termin anlegen' in html
+    assert 'href="/neu" data-modal>Neu' in html
 
 
 def test_agenda_status_line_shows_a_redacted_sync_error():
@@ -303,63 +302,3 @@ def test_link_picker_page_shows_suggestions_and_the_upcoming_list():
     assert "Termine der nächsten 60 Tage" in html
     assert "Verknüpft ✓" in html
     assert '<a class="plain back" href="/posts/p1">« Zum Post</a>' in html
-
-
-# -- new event page -------------------------------------------------------------------
-
-
-def make_event_form() -> EventForm:
-    return EventForm(
-        title="Fest",
-        day=date(2026, 9, 12),
-        start=time(18, 0),
-        end=time(22, 0),
-        whole_day=False,
-        description="Text",
-        location="Ort",
-        who="Jona",
-        sub_calendar_ids=frozenset({SUB_CALENDAR.id}),
-    )
-
-
-def test_new_event_page_shows_the_post_header_and_the_prefilled_form():
-    post = make_post("p1", caption="Sommerfest")
-    html = templates.env.get_template("new_event.html").render(
-        post=post, form=make_event_form(), sub_calendars=[SUB_CALENDAR], error=None, now=NOW
-    )
-
-    assert "Termin anlegen" in html
-    assert "Sommerfest" in html
-    assert 'value="Fest"' in html
-    assert 'value="2026-09-12"' in html
-    assert 'value="18:00"' in html
-    assert 'value="22:00"' in html
-    assert 'value="Ort"' in html
-    assert 'value="Jona"' in html
-    assert SUB_CALENDAR.name in html
-    assert "checked" in html
-
-
-def test_new_event_page_shows_an_error_notice():
-    post = make_post("p1")
-    html = templates.env.get_template("new_event.html").render(
-        post=post,
-        form=make_event_form(),
-        sub_calendars=[SUB_CALENDAR],
-        error="Das Ende muss nach dem Beginn liegen.",
-        now=NOW,
-    )
-
-    assert '<div class="notice">' in html
-    assert "Das Ende muss nach dem Beginn liegen." in html
-
-
-def test_new_event_page_without_a_post_omits_the_post_header_and_works_standalone():
-    html = templates.env.get_template("new_event.html").render(
-        post=None, form=make_event_form(), sub_calendars=[SUB_CALENDAR], error=None, now=NOW
-    )
-
-    assert "Termin anlegen" in html
-    assert "« Zum Post" not in html
-    assert 'name="post_id" value=""' in html
-    assert 'href="/calendar">Abbrechen' in html

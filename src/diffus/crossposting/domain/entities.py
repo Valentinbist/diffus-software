@@ -6,7 +6,7 @@ import secrets
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import ClassVar
@@ -305,6 +305,66 @@ class LinkedEvent:
     starts_at: datetime
     detail_url: str
     removed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class SubCalendarOption:
+    """One sub-calendar the wizard's event step can file a new event under.
+
+    Mirrors calendar.domain.entities.SubCalendar the other way round — the
+    same "each context keeps its own tiny read model of the other's entity"
+    rule LinkedEvent already follows for a calendar event.
+    """
+
+    id: int
+    name: str
+    color: str
+
+
+@dataclass(frozen=True, slots=True)
+class EventPrefill:
+    """What to prefill the wizard's event step with.
+
+    Mirrors calendar.application.create_event.EventPrefill the other way
+    round, for the same reason LinkedEvent mirrors CalendarEvent.
+    """
+
+    title: str
+    day: date
+    start: time
+    end: time
+    whole_day: bool
+    description: str
+    sub_calendar_ids: frozenset[int]
+
+
+@dataclass(frozen=True, slots=True)
+class EventFormOptions:
+    """Everything the wizard's event step needs to render: prefill, sub-calendars, and the post."""
+
+    prefill: EventPrefill
+    sub_calendars: tuple[SubCalendarOption, ...]
+    # The post this form is for, or None (no post, or an unknown one) — see
+    # EventDirectory.event_form.
+    post_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class NewEventRequest:
+    """The event step's submitted form, on its way to EventDirectory.create_event.
+
+    Mirrors calendar.application.create_event.EventForm the other way round.
+    """
+
+    title: str
+    day: date
+    start: time
+    end: time
+    whole_day: bool
+    description: str
+    location: str
+    who: str
+    sub_calendar_ids: frozenset[int]
 
 
 @dataclass(frozen=True, slots=True)

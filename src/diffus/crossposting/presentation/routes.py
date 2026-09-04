@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import contextlib
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlencode
@@ -14,8 +14,21 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from diffus.crossposting.application.channels import all_auto
-from diffus.crossposting.domain.entities import Destination, DraftStatus, PostDraft, PublishTargets
-from diffus.crossposting.domain.errors import ConnectorError, DraftError, NotConnectedError
+from diffus.crossposting.domain.entities import (
+    Destination,
+    DraftStatus,
+    EventPrefill,
+    NewEventRequest,
+    PostDraft,
+    PublishTargets,
+    SubCalendarOption,
+)
+from diffus.crossposting.domain.errors import (
+    ConnectorError,
+    DraftError,
+    EventCreationError,
+    NotConnectedError,
+)
 from diffus.crossposting.presentation import display
 from diffus.crossposting.presentation.services import Services, get_services
 from diffus.shared.presentation.auth import require_auth
@@ -57,6 +70,7 @@ def build_templates(tz: ZoneInfo, calendar_enabled: bool = False) -> Jinja2Templ
     templates.env.filters["stored_cover"] = display.stored_cover
     templates.env.filters["source_label"] = display.source_label
     templates.env.filters["instagram_hint"] = display.instagram_hint
+    templates.env.filters["channel_lines"] = display.channel_lines
     return templates
 
 
@@ -69,7 +83,6 @@ async def index(request: Request, services: ServicesDep, events: str = "all", so
         source = "all"
     overview.posts = display.filter_by_events(overview.posts, events)
     overview.posts = display.filter_by_source(overview.posts, source)
-    channels = await services.channels.run()
     review_count = await services.review_count.run()
     return services.templates.TemplateResponse(
         request,
@@ -83,7 +96,6 @@ async def index(request: Request, services: ServicesDep, events: str = "all", so
             "event_pills": display.EVENT_PILLS,
             "source": source,
             "source_pills": display.SOURCE_PILLS,
-            "channels": channels,
             "review_count": review_count,
         },
     )
@@ -99,7 +111,8 @@ async def set_channels(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="bad destination") from exc
     await services.set_auto_publish.run(parsed)
-    return RedirectResponse("/", status_code=303)
+    # The switches now live on the setup page, not the overview (round 4).
+    return RedirectResponse("/freigabe/setup", status_code=303)
 
 
 # -- Freigabe: the review queue -------------------------------------------------
@@ -127,6 +140,29 @@ async def _render_review(
 @router.get("/freigabe")
 async def review_page(request: Request, services: ServicesDep):
     return await _render_review(request, services)
+
+
+@router.get("/freigabe/setup")
+async def setup_page(request: Request, services: ServicesDep):
+    """Instagram connection, the channel switches, and PUBLIC_BASE_URL readiness.
+
+    Moved off the overview (round 4, owner: "a setup page, which should live
+    in the freigabe view"): `services.overview` still carries the token (the
+    one place that reads it), and `limit=0` skips fetching any posts for a
+    page that never lists them.
+    """
+    overview = await services.overview.run(limit=0)
+    channels = await services.channels.run()
+    return services.templates.TemplateResponse(
+        request,
+        "setup.html",
+        {
+            "ov": overview,
+            "now": datetime.now(UTC),
+            "last_run": services.sync_job.last_run,
+            "channels": channels,
+        },
+    )
 
 
 @router.get("/freigabe/count")
@@ -187,7 +223,112 @@ async def reject_post_deliveries(services: ServicesDep, post_id: str):
     return RedirectResponse("/freigabe", status_code=303)
 
 
-# -- Compose wizard: create a post, with or without an event --------------------
+# -- The wizard, step 1: Termin -------------------------------------------------
+#
+# One flow, three steps — Termin (/neu) -> Post (/posts/new) -> Vorschau
+# (/posts/new/{draft}) — each of the first two skippable. Registered before
+# GET /posts/{post_id} for the same reason as the compose routes below:
+# FastAPI matches routes in registration order.
+
+
+def _event_prefill_from_options(prefill: EventPrefill) -> NewEventRequest:
+    """The GET form's starting values: options.prefill has no location/who (see EventPrefill)."""
+    return NewEventRequest(
+        title=prefill.title,
+        day=prefill.day,
+        start=prefill.start,
+        end=prefill.end,
+        whole_day=prefill.whole_day,
+        description=prefill.description,
+        location="",
+        who="",
+        sub_calendar_ids=prefill.sub_calendar_ids,
+    )
+
+
+async def _render_wizard_event(
+    request: Request,
+    services: Services,
+    post_id: str | None,
+    prefill: NewEventRequest,
+    sub_calendars: tuple[SubCalendarOption, ...],
+    error: str | None = None,
+    status_code: int = 200,
+):
+    view = await services.detail.run(post_id) if post_id else None
+    return services.templates.TemplateResponse(
+        request,
+        "wizard_event.html",
+        {
+            "post_id": post_id,
+            "prefill": prefill,
+            "sub_calendars": sub_calendars,
+            "view": view,
+            "error": error,
+            "now": datetime.now(UTC),
+        },
+        status_code=status_code,
+    )
+
+
+@router.get("/neu")
+async def wizard_event_get(request: Request, services: ServicesDep, post: str | None = None):
+    options = await services.events.event_form(post)
+    if options is None:
+        # None means either "the calendar is off" (post is None: NoEvents
+        # always answers None) or "post names an unknown post" — the two
+        # never happen for the same request, so `post` alone disambiguates.
+        if post is None:
+            return RedirectResponse("/posts/new", status_code=303)
+        raise HTTPException(status_code=404, detail="unknown post")
+    prefill = _event_prefill_from_options(options.prefill)
+    return await _render_wizard_event(
+        request, services, options.post_id, prefill, options.sub_calendars
+    )
+
+
+@router.post("/neu")
+async def wizard_event_post(
+    request: Request,
+    services: ServicesDep,
+    post_id: str = Form(""),
+    title: str = Form(...),
+    day: date = Form(...),  # noqa: B008 - fastapi.Form, not a mutable default
+    start: time = Form(...),  # noqa: B008 - fastapi.Form, not a mutable default
+    end: time = Form(...),  # noqa: B008 - fastapi.Form, not a mutable default
+    whole_day: bool = Form(False),
+    description: str = Form(""),
+    location: str = Form(""),
+    who: str = Form(""),
+    cal: Annotated[list[int], Form()] = [],  # noqa: B006 - FastAPI re-resolves this per request
+):
+    prefill = NewEventRequest(
+        title=title,
+        day=day,
+        start=start,
+        end=end,
+        whole_day=whole_day,
+        description=description,
+        location=location,
+        who=who,
+        sub_calendar_ids=frozenset(cal),
+    )
+    try:
+        event = await services.events.create_event(prefill, post_id or None)
+    except EventCreationError as exc:
+        options = await services.events.event_form(post_id or None)
+        sub_calendars = options.sub_calendars if options is not None else ()
+        return await _render_wizard_event(
+            request, services, post_id or None, prefill, sub_calendars, str(exc), 400
+        )
+    if post_id:
+        # The calendar already linked the post itself (EventDirectory.create_event's
+        # contract) — the wizard is done, step 2 never happens for this path.
+        return RedirectResponse(f"/calendar/events/{event.id}", status_code=303)
+    return RedirectResponse(f"/posts/new?event={event.id}", status_code=303)
+
+
+# -- Compose wizard, steps 2 and 3: Post, then Vorschau --------------------------
 #
 # Registered between index() and GET /posts/{post_id} on purpose: FastAPI
 # matches routes in registration order, and "/posts/new" would otherwise be
@@ -419,10 +560,12 @@ async def draft_media(draft_id: str, index: int, services: ServicesDep):
 
 
 @router.post("/sync")
-async def sync_now(services: ServicesDep):
+async def sync_now(services: ServicesDep, next: str = Form("/")):
     # Same job the scheduler runs, so a manual sync also heals a stale token.
     await services.sync_job.run()
-    return RedirectResponse("/", status_code=303)
+    # Only ever bounce back to one of our own pages — same guard as /resend.
+    target = next if next.startswith("/") and not next.startswith("//") else "/"
+    return RedirectResponse(target, status_code=303)
 
 
 @router.post("/resend")

@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% set active_page = "posts" %}
+
+{% block title %}Neu – Social Posts{% endblock %}
+
+{% block content %}
+<p class="meta kicker"><a class="plain back" href="{{ '/posts/' ~ post_id if post_id else '/' }}">« Abbrechen</a></p>
+<h1 class="h1">Neu</h1>
+{% set step = 1 %}
+{% include "_steps.html" with context %}
+
+{% if view %}
+{% set post = view.post %}
+<article class="row">
+  <a class="thumb" href="/posts/{{ post.id }}" data-modal>
+    {% set cover = view|stored_cover %}
+    {% if cover is not none %}
+    <img src="/posts/{{ post.id }}/media/{{ cover }}" alt="" loading="lazy">
+    {% elif post.cover_url %}
+    <img src="{{ post.cover_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">
+    {% else %}
+    <span class="ph">{{ "Video" if post.media and post.media[0].type.value == "video" else "Bild" }}</span>
+    {% endif %}
+  </a>
+  <div class="row-body">
+    {% set caption = post.caption|summary %}
+    <p class="body">{% if caption %}{{ caption }}{% else %}<span class="muted">Ohne Text</span>{% endif %}</p>
+    <p class="meta">{{ post.posted_at|when(now) }}</p>
+  </div>
+</article>
+{% endif %}
+
+{% if error %}
+<div class="notice"><p class="body">{{ error }}</p></div>
+{% endif %}
+
+<form method="post" action="/neu" class="stack">
+  <input type="hidden" name="post_id" value="{{ post_id or '' }}">
+  <input type="text" name="title" value="{{ prefill.title }}" required>
+  <input type="date" name="day" value="{{ prefill.day.isoformat() }}" required>
+  <input type="time" name="start" value="{{ prefill.start.strftime('%H:%M') }}" required>
+  <input type="time" name="end" value="{{ prefill.end.strftime('%H:%M') }}" required>
+  <label><input type="checkbox" name="whole_day" {% if prefill.whole_day %}checked{% endif %}> Ganztägig</label>
+
+  <p class="meta tags">
+    {% for sc in sub_calendars %}
+    <label>
+      <input type="checkbox" name="cal" value="{{ sc.id }}" {% if sc.id in prefill.sub_calendar_ids %}checked{% endif %}>
+      <span class="dot" style="background:{{ sc.color }}"></span>{{ sc.name }}
+    </label>
+    {% endfor %}
+  </p>
+
+  <textarea name="description" rows="6">{{ prefill.description }}</textarea>
+  <input type="text" name="location" placeholder="Ort" value="{{ prefill.location }}">
+  <input type="text" name="who" placeholder="Eingetragen von" value="{{ prefill.who }}">
+
+  <div class="actions">
+    <button type="submit" class="btn btn-solid">Termin anlegen und weiter</button>
+    {% if not post_id %}<a class="btn" href="/posts/new">Ohne Termin weiter</a>{% endif %}
+  </div>
+</form>
+{% endblock %}

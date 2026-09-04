@@ -7,6 +7,7 @@ into Jinja as filters by presentation/routes.py.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from diffus.crossposting.application.channels import InstagramChannel
 from diffus.crossposting.application.overview import PostView
@@ -81,6 +82,44 @@ def delivery_label(delivery: Delivery, multi_target: bool) -> str:
     else:
         target = sink_label(delivery.destination.sink)
     return f"{target} {STATUS_TEXT[delivery.status]}"
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelLine:
+    """One line of 'where does this post stand': an origin fact, or a delivery attempt."""
+
+    label: str
+    ok: bool
+    attention: bool
+    # Only the Instagram-origin line has one, to the post's own permalink;
+    # a delivery line never links anywhere.
+    href: str | None
+
+
+def channel_lines(view: PostView, multi_target: bool) -> list[ChannelLine]:
+    """The post's Instagram origin (if any), then its deliveries, destination-sorted.
+
+    A post polled from Instagram was never "delivered" there by this app —
+    it's the origin, not a Delivery row — so without this, a polled post's
+    own channel list would silently omit Instagram entirely (see the round 4
+    plan, "Instagram-origin indicator").
+    """
+    lines = []
+    if view.post.source == "instagram":
+        lines.append(
+            ChannelLine("Instagram ✓", ok=True, attention=False, href=view.post.permalink or None)
+        )
+    deliveries = sorted(view.deliveries, key=lambda d: d.destination)
+    lines += [
+        ChannelLine(
+            label=delivery_label(d, multi_target),
+            ok=d.status == DeliveryStatus.SENT,
+            attention=d.status == DeliveryStatus.FAILED,
+            href=None,
+        )
+        for d in deliveries
+    ]
+    return lines
 
 
 def instagram_hint(ch: InstagramChannel) -> str | None:

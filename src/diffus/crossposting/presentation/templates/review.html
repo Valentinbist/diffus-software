@@ -7,6 +7,8 @@
 <p class="meta kicker">Was noch nicht draußen ist</p>
 <h1 class="h1">Freigabe</h1>
 
+<p class="pills"><span class="pill current">Warteschlange</span><a class="pill" href="/freigabe/setup">Einrichtung</a></p>
+
 {% if error %}
 <div class="notice"><p class="body">{{ error }}</p></div>
 {% endif %}
@@ -79,6 +81,15 @@
       {% set caption = post.caption|summary %}
       <p class="body"><a class="plain" href="/posts/{{ post.id }}" data-modal>{% if caption %}{{ caption }}{% else %}<span class="muted">Ohne Text</span>{% endif %}</a></p>
       <p class="meta">{{ post.posted_at|when(now) }}</p>
+      {% set lines = pr.view|channel_lines(multi_target) %}
+      {% if lines %}
+      <div class="targets">
+        {% for line in lines %}
+        {% if line.href %}<a class="meta{% if line.attention %} attention{% endif %}" href="{{ line.href }}" target="_blank" rel="noopener">{{ line.label }}</a>
+        {% else %}<span class="meta{% if line.attention %} attention{% endif %}">{{ line.label }}</span>{% endif %}
+        {% endfor %}
+      </div>
+      {% endif %}
       <form method="post" action="/freigabe/posts/{{ post.id }}/approve" class="stack">
         {% for d in pr.proposed %}
         <label><input type="checkbox" name="telegram" value="{{ d.address }}" checked> {{ d.sink|sink_label }} {{ d.address }}</label>

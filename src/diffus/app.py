@@ -150,9 +150,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # GetOverview/GetPostDetail can be given a real EventDirectory instead of
     # wiring it in after the fact.
     calendar_uow = None
+    calendar_gateway = None
     events: EventDirectory = NoEvents()
     if settings.calendar_enabled:
         calendar_uow = functools.partial(SqlCalendarUnitOfWork, session_factory)
+        # Built here (not down with the rest of calendar_services) because
+        # CalendarEventDirectory.create_event_uc needs it too; the second
+        # `if settings.calendar_enabled` block below reuses this same instance.
+        calendar_gateway = KalenderDigitalClient(
+            http,
+            token=settings.kalender_digital_token,
+            api_base=settings.kalender_digital_api_base,
+        )
         # The one exception to "contexts never import each other's
         # application layer": a context's adapter may call another context's
         # application read use cases (see docs/architecture.md, Bounded contexts).
@@ -163,9 +172,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # built with `events`, i.e. this very directory. Break the cycle with
         # a second, event-less catalog used only to validate a post id when
         # linking (LinkEventPost.add never reads an event's own linked
-        # events, so NoEvents costs nothing here); the real catalog built
-        # further down, from the real overview/detail, is what every page
-        # actually uses.
+        # events, so NoEvents costs nothing here) and when prefilling/creating
+        # an event for a post (CreateEventForPost.prefill/create only read a
+        # post's own fields, never its linked events either); the real
+        # catalog built further down, from the real overview/detail, is what
+        # every page actually uses.
         link_catalog = CrosspostingPostCatalog(
             overview=GetOverview(uow=uow, source=instagram.source, events=NoEvents()),
             detail=GetPostDetail(uow=uow, events=NoEvents()),
@@ -174,6 +185,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             linked=GetLinkedEvents(uow=calendar_uow),
             hint=GetComposeHint(uow=calendar_uow, tz=tz),
             link_post=LinkEventPost(uow=calendar_uow, posts=link_catalog),
+            create_event_uc=CreateEventForPost(
+                uow=calendar_uow, posts=link_catalog, calendar=calendar_gateway, tz=tz
+            ),
         )
 
     overview = GetOverview(uow=uow, source=instagram.source, events=events)
@@ -244,11 +258,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     calendar_services: CalendarServices | None = None
     if settings.calendar_enabled:
         assert calendar_uow is not None
-        calendar_gateway = KalenderDigitalClient(
-            http,
-            token=settings.kalender_digital_token,
-            api_base=settings.kalender_digital_api_base,
-        )
+        assert calendar_gateway is not None
         sync_calendar = SyncCalendar(
             calendar=calendar_gateway,
             uow=calendar_uow,

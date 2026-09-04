@@ -20,8 +20,10 @@ from diffus.crossposting.domain.entities import (
     Delivery,
     Destination,
     DraftImage,
+    EventFormOptions,
     LinkedEvent,
     MediaFile,
+    NewEventRequest,
     Post,
     PostDraft,
     Preview,
@@ -119,6 +121,15 @@ class EventDirectory(Protocol):
 
     async def link(self, event_id: str, post_id: str) -> None:
         """Record that a just-published post belongs to this event."""
+        ...
+
+    async def event_form(self, post_id: str | None) -> EventFormOptions | None:
+        """The wizard's event step, prefilled for this post — or None (calendar off, or post
+        unknown)."""
+        ...
+
+    async def create_event(self, request: NewEventRequest, post_id: str | None) -> LinkedEvent:
+        """Write the event; raises EventCreationError. Links the post itself when one is given."""
         ...
 
 

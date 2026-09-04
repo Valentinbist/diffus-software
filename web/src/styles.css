@@ -70,6 +70,8 @@ a:hover, a:focus { color: var(--text-muted); }
 
 .kicker { margin-bottom: 6px; }
 .status { margin-top: 14px; }
+.steps { margin-top: 6px; }
+.steps .current { color: var(--text-body); }
 
 /* Button component: outline pill, hover goes grey, solid variant is white */
 .btn {

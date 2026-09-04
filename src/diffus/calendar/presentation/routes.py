@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 from zoneinfo import ZoneInfo
@@ -11,8 +11,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from diffus.calendar.application.create_event import EventForm
-from diffus.calendar.domain.errors import CalendarError, UnknownEventError, UnknownPostError
+from diffus.calendar.domain.errors import UnknownEventError, UnknownPostError
 from diffus.calendar.presentation import display
 from diffus.calendar.presentation.services import CalendarServices, get_calendar_services
 from diffus.shared.presentation.auth import require_auth
@@ -141,102 +140,16 @@ async def link_from_post(
     return RedirectResponse(target, status_code=303)
 
 
-async def _rerender_new_event(
-    request: Request,
-    services: CalendarServices,
-    post_id: str,
-    form: EventForm,
-    error: str,
-    status_code: int,
-):
-    # prefill(None) never returns None, so this 404 only ever fires when
-    # post_id names a post that isn't there (i.e. post_id was given).
-    result = await services.create_event.prefill(post_id or None)
-    if result is None:
-        raise HTTPException(status_code=404, detail="unknown post")
-    post, _prefill, sub_calendars = result
-    return services.templates.TemplateResponse(
-        request,
-        "new_event.html",
-        {
-            "post": post,
-            "form": form,
-            "sub_calendars": sub_calendars,
-            "error": error,
-            "now": datetime.now(UTC),
-        },
-        status_code=status_code,
-    )
-
-
 # Registered before /events/{event_id} so "new" is never swallowed as an event id.
-# `post` is optional: the event wizard also works standalone, reached from the
-# calendar page's or header's "Termin anlegen" / "+ Termin" link.
+# Round 4: the event form itself moved to crossposting's unified wizard
+# (GET/POST /neu) — this is now just a redirect for old links/bookmarks,
+# `post` passed through unchanged. CreateEventForPost (services.create_event)
+# stays: crossposting/infrastructure/calendar.py::CalendarEventDirectory
+# calls it directly, it's just no longer driven from a route in this context.
 @router.get("/events/new")
-async def new_event_get(request: Request, services: ServicesDep, post: str | None = None):
-    result = await services.create_event.prefill(post)
-    if result is None:
-        raise HTTPException(status_code=404, detail="unknown post")
-    linkable_post, prefill, sub_calendars = result
-    form = EventForm(
-        title=prefill.title,
-        day=prefill.day,
-        start=prefill.start,
-        end=prefill.end,
-        whole_day=prefill.whole_day,
-        description=prefill.description,
-        location="",
-        who="",
-        sub_calendar_ids=prefill.sub_calendar_ids,
-    )
-    return services.templates.TemplateResponse(
-        request,
-        "new_event.html",
-        {
-            "post": linkable_post,
-            "form": form,
-            "sub_calendars": sub_calendars,
-            "error": None,
-            "now": datetime.now(UTC),
-        },
-    )
-
-
-@router.post("/events/new")
-async def new_event_post(
-    request: Request,
-    services: ServicesDep,
-    post_id: str = Form(""),
-    title: str = Form(...),
-    day: date = Form(...),  # noqa: B008 - fastapi.Form, not a mutable default
-    start: time = Form(...),  # noqa: B008 - fastapi.Form, not a mutable default
-    end: time = Form(...),  # noqa: B008 - fastapi.Form, not a mutable default
-    whole_day: bool = Form(False),
-    description: str = Form(""),
-    location: str = Form(""),
-    who: str = Form(""),
-    cal: Annotated[list[int], Form()] = [],  # noqa: B006 - FastAPI re-resolves this per request
-):
-    form = EventForm(
-        title=title,
-        day=day,
-        start=start,
-        end=end,
-        whole_day=whole_day,
-        description=description,
-        location=location,
-        who=who,
-        sub_calendar_ids=frozenset(cal),
-    )
-    try:
-        event = await services.create_event.create(post_id or None, form)
-    except UnknownPostError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        return await _rerender_new_event(request, services, post_id, form, str(exc), 400)
-    except CalendarError as exc:
-        return await _rerender_new_event(request, services, post_id, form, str(exc), 502)
-    return RedirectResponse(f"/calendar/events/{event.id}", status_code=303)
+async def new_event_redirect(post: str | None = None):
+    target = f"/neu?post={post}" if post else "/neu"
+    return RedirectResponse(target, status_code=303)
 
 
 @router.get("/events/{event_id}")

@@ -15,6 +15,8 @@ from diffus.crossposting.domain.entities import (
     Post,
 )
 from diffus.crossposting.presentation.display import (
+    ChannelLine,
+    channel_lines,
     delivery_label,
     filter_by_events,
     filter_by_source,
@@ -158,3 +160,60 @@ def test_instagram_hint_covers_all_four_states():
         "nicht laden. Telegram geht trotzdem."
     )
     assert instagram_hint(make_channel()) is None
+
+
+# -- channel_lines --------------------------------------------------------------
+
+
+def make_post_with_source(source: str, permalink: str = "https://instagram.com/p/p1/") -> Post:
+    return Post(
+        id="p1", source=source, caption=None, permalink=permalink, media=(), posted_at=NOW
+    )
+
+
+def test_channel_lines_for_an_instagram_post_starts_with_the_origin_line():
+    post = make_post_with_source("instagram")
+    dest = Destination("telegram", "c1")
+    sent = Delivery(post_id="p1", destination=dest, status=DeliveryStatus.SENT)
+
+    lines = channel_lines(PostView(post=post, deliveries=[sent]), multi_target=False)
+
+    assert lines[0] == ChannelLine(
+        "Instagram ✓", ok=True, attention=False, href="https://instagram.com/p/p1/"
+    )
+    assert lines[1] == ChannelLine("Telegram ✓", ok=True, attention=False, href=None)
+
+
+def test_channel_lines_for_an_app_post_has_no_origin_line():
+    post = make_post_with_source("diffus")
+
+    lines = channel_lines(PostView(post=post, deliveries=[]), multi_target=False)
+
+    assert lines == []
+
+
+def test_channel_lines_marks_a_failed_delivery_with_attention_and_not_ok():
+    post = make_post_with_source("diffus")
+    failed = Delivery(
+        post_id="p1", destination=Destination("telegram", "c1"), status=DeliveryStatus.FAILED
+    )
+
+    [line] = channel_lines(PostView(post=post, deliveries=[failed]), multi_target=False)
+
+    assert line.ok is False
+    assert line.attention is True
+    assert line.href is None
+
+
+def test_channel_lines_orders_deliveries_by_destination():
+    post = make_post_with_source("diffus")
+    c2 = Delivery(
+        post_id="p1", destination=Destination("telegram", "c2"), status=DeliveryStatus.SENT
+    )
+    c1 = Delivery(
+        post_id="p1", destination=Destination("telegram", "c1"), status=DeliveryStatus.SENT
+    )
+
+    lines = channel_lines(PostView(post=post, deliveries=[c2, c1]), multi_target=True)
+
+    assert [line.label for line in lines] == ["Telegram c1 ✓", "Telegram c2 ✓"]

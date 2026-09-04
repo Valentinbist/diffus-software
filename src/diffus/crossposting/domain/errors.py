@@ -27,3 +27,8 @@ class UploadTooLargeError(DraftError):
 
 class PublishError(ConnectorError):
     """Raised when Instagram publishing fails: container creation, readiness, or media_publish."""
+
+
+class EventCreationError(ConnectorError):
+    """Raised when the wizard's event step fails to write a calendar event: German message, shown
+    to the user as-is — see EventDirectory.create_event."""

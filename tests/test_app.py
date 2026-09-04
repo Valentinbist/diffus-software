@@ -5,7 +5,7 @@ Uses httpx.ASGITransport, not Starlette's deprecated TestClient.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -53,14 +53,19 @@ from diffus.crossposting.domain.entities import (
     ComposeHint,
     Destination,
     DraftImage,
+    EventFormOptions,
+    EventPrefill,
     LinkedEvent,
     MediaItem,
     MediaType,
+    NewEventRequest,
     Post,
     PostDraft,
     Preview,
+    SubCalendarOption,
     Token,
 )
+from diffus.crossposting.domain.errors import EventCreationError
 from diffus.crossposting.domain.ports import EventDirectory
 from diffus.crossposting.presentation.routes import build_templates
 from diffus.crossposting.presentation.services import Services
@@ -493,42 +498,7 @@ async def test_pages_and_resend_work_on_fakes(settings_env):
     assert resp.status_code == 401
 
 
-async def test_new_event_wizard_is_prefilled_and_posting_it_creates_and_links_the_event(
-    settings_env,
-):
-    uow, catalog = make_calendar_uow()
-    calendar_services = make_calendar_services(uow, catalog)
-    services = make_services(await make_uow(), FakeSink(), FakeMedia())
-    app = create_app(services=services, calendar=calendar_services)
-
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
-    ) as client:
-        resp = await client.get("/calendar/events/new?post=p1")
-        assert resp.status_code == 200
-        assert "Termin anlegen" in resp.text
-
-        resp = await client.post(
-            "/calendar/events/new",
-            data={
-                "post_id": "p1",
-                "title": "Neuer Termin",
-                "day": "2026-09-10",
-                "start": "18:00",
-                "end": "20:00",
-                "description": "",
-                "location": "",
-                "who": "",
-            },
-        )
-        assert resp.status_code == 303
-
-        resp = await client.get(resp.headers["location"])
-        assert resp.status_code == 200
-        assert "/posts/p1" in resp.text
-
-
-async def test_standalone_new_event_wizard_works_without_a_post(settings_env):
+async def test_calendar_events_new_redirects_to_the_unified_wizard(settings_env):
     uow, catalog = make_calendar_uow()
     calendar_services = make_calendar_services(uow, catalog)
     services = make_services(await make_uow(), FakeSink(), FakeMedia())
@@ -538,26 +508,12 @@ async def test_standalone_new_event_wizard_works_without_a_post(settings_env):
         transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
     ) as client:
         resp = await client.get("/calendar/events/new")
-        assert resp.status_code == 200
-        assert "Termin anlegen" in resp.text
-
-        resp = await client.post(
-            "/calendar/events/new",
-            data={
-                "title": "Spontaner Termin",
-                "day": "2026-09-10",
-                "start": "18:00",
-                "end": "20:00",
-                "description": "",
-                "location": "",
-                "who": "",
-            },
-        )
         assert resp.status_code == 303
+        assert resp.headers["location"] == "/neu"
 
-        resp = await client.get(resp.headers["location"])
-        assert resp.status_code == 200
-        assert "Noch kein Post verknüpft." in resp.text
+        resp = await client.get("/calendar/events/new?post=p1")
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/neu?post=p1"
 
 
 # -- round 3: the crossposting compose wizard, Freigabe queue, and channel switches --
@@ -722,6 +678,47 @@ async def test_set_channels_with_a_malformed_destination_is_rejected(settings_en
     assert resp.status_code == 400
 
 
+async def test_set_channels_redirects_to_the_setup_page(settings_env):
+    services = make_services(await make_uow(), FakeSink(), FakeMedia())
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.post("/channels", data={"auto": "telegram:c1"})
+
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/freigabe/setup"
+
+
+async def test_setup_page_shows_the_kanaele_switches(settings_env):
+    services = make_services(await make_uow(), FakeSink(), FakeMedia())
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.get("/freigabe/setup")
+
+    assert resp.status_code == 200
+    assert "Kanäle" in resp.text
+
+
+async def test_sync_now_bounces_back_to_next_but_never_off_site(settings_env):
+    services = make_services(await make_uow(), FakeSink(), FakeMedia())
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.post("/sync", data={"next": "/freigabe/setup"})
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/freigabe/setup"
+
+        resp = await client.post("/sync", data={"next": "//evil.example.com"})
+        assert resp.headers["location"] == "/"
+
+
 async def test_review_count_badge_requires_auth(settings_env):
     services = make_services(await make_uow(), FakeSink(), FakeMedia())
     app = create_app(services=services)
@@ -804,3 +801,201 @@ async def test_rejecting_a_draft_removes_it_from_freigabe(settings_env):
 
         resp = await client.get("/freigabe")
         assert "Wird abgelehnt" not in resp.text
+
+
+# -- round 4: the unified wizard (Termin -> Post -> Vorschau) ------------------------
+
+
+def make_event_form_options(post_id: str | None = None) -> EventFormOptions:
+    return EventFormOptions(
+        prefill=EventPrefill(
+            title="Fest",
+            day=date(2026, 9, 12),
+            start=time(18, 0),
+            end=time(22, 0),
+            whole_day=False,
+            description="",
+            sub_calendar_ids=frozenset(),
+        ),
+        sub_calendars=(
+            SubCalendarOption(id=5298948, name="Öffentliche Veranstaltung", color="#9BBB59"),
+        ),
+        post_id=post_id,
+    )
+
+
+async def test_wizard_redirects_to_compose_when_the_calendar_is_off(settings_env):
+    # events defaults to NoEvents
+    services = make_services(await make_uow(), FakeSink(), FakeMedia())
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.get("/neu")
+
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/posts/new"
+
+
+async def test_wizard_get_with_an_unknown_post_404s(settings_env):
+    events = FakeEventDirectory()
+    services = make_services(await make_uow(), FakeSink(), FakeMedia(), events=events)
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.get("/neu?post=unbekannt")
+
+    assert resp.status_code == 404
+
+
+async def test_header_links_to_the_wizard_not_the_old_calendar_form(settings_env):
+    services = make_services(await make_uow(), FakeSink(), FakeMedia())
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.get("/")
+
+    assert 'href="/neu"' in resp.text
+    assert "/calendar/events/new" not in resp.text
+
+
+async def test_wizard_event_creation_error_rerenders_with_the_message_and_typed_title(
+    settings_env,
+):
+    events = FakeEventDirectory(
+        event_form=make_event_form_options(), fail=EventCreationError("Kalender hakt.")
+    )
+    services = make_services(await make_uow(), FakeSink(), FakeMedia(), events=events)
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.post(
+            "/neu",
+            data={
+                "title": "Mein Termin",
+                "day": "2026-09-12",
+                "start": "18:00",
+                "end": "22:00",
+                "description": "",
+                "location": "",
+                "who": "",
+            },
+        )
+
+    assert resp.status_code == 400
+    assert "Kalender hakt." in resp.text
+    assert 'value="Mein Termin"' in resp.text
+
+
+async def test_wizard_from_a_post_skips_the_post_step_and_finishes_on_the_event(settings_env):
+    events = FakeEventDirectory(event_form=make_event_form_options())
+    services = make_services(await make_uow(), FakeSink(), FakeMedia(), events=events)
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.get("/neu?post=p1")
+        assert resp.status_code == 200
+        assert "Hello" in resp.text  # p1's caption, from make_uow()
+
+        resp = await client.post(
+            "/neu",
+            data={
+                "post_id": "p1",
+                "title": "Fest",
+                "day": "2026-09-12",
+                "start": "18:00",
+                "end": "22:00",
+                "description": "",
+                "location": "",
+                "who": "",
+            },
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/calendar/events/new-1"
+
+    assert len(events.created) == 1
+    assert events.created[0][1] == "p1"
+
+
+async def test_wizard_full_flow_termin_then_post_then_preview_to_a_published_event(settings_env):
+    hint = ComposeHint(
+        event_id="new-1", title="Fest", caption="", detail_url="/calendar/events/new-1"
+    )
+    events = FakeEventDirectory(event_form=make_event_form_options(), hints={"new-1": hint})
+    uow = await make_uow()
+    sink = FakeSink()
+    services = make_services(uow, sink, FakeMedia(), events=events)
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.get("/neu")
+        assert resp.status_code == 200
+        assert 'value="Fest"' in resp.text
+
+        resp = await client.post(
+            "/neu",
+            data={
+                "title": "Fest",
+                "day": "2026-09-12",
+                "start": "18:00",
+                "end": "22:00",
+                "description": "",
+                "location": "",
+                "who": "",
+            },
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/posts/new?event=new-1"
+        assert events.created == [
+            (
+                NewEventRequest(
+                    title="Fest",
+                    day=date(2026, 9, 12),
+                    start=time(18, 0),
+                    end=time(22, 0),
+                    whole_day=False,
+                    description="",
+                    location="",
+                    who="",
+                    sub_calendar_ids=frozenset(),
+                ),
+                None,
+            )
+        ]
+
+        resp = await client.get("/posts/new?event=new-1")
+        assert resp.status_code == 200
+        assert "Für Termin:" in resp.text
+        assert "Fest" in resp.text
+
+        await client.post("/channels", data={"auto": "telegram:c1"})
+
+        resp = await client.post(
+            "/posts/new",
+            data={"caption": "Fest ist toll", "telegram": "c1", "event": "new-1"},
+            files=[("images", ("a.png", ONE_BY_ONE_PNG, "image/png"))],
+        )
+        preview_url = resp.headers["location"]
+        assert preview_url.startswith("/posts/new/")
+
+        resp = await client.get(preview_url)
+        assert resp.status_code == 200
+        assert "Veröffentlichen" in resp.text
+
+        resp = await client.post(preview_url.split("?")[0] + "/submit", data={"telegram": "c1"})
+        assert resp.status_code == 303
+        assert resp.headers["location"].startswith("/calendar/events/new-1?published=")
+
+    assert events.links
+    assert events.links[0][0] == "new-1"

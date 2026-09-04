@@ -23,6 +23,7 @@ wired today; the model no longer assumes it.
 | Routing | `TELEGRAM_CHAT_IDS` env var → `Destination("telegram", chat_id)` list built in the composition root | Edited twice a year, no CRUD needed |
 | UI | Jinja served by FastAPI, German, matching the diffus.space design system, plus a Vite/TypeScript/htmx build (`web/`) for progressive-enhancement client code; on a ≥ 900 px viewport, detail pages (a post, an event, a wizard) open as a `<dialog>` modal instead of a full navigation | Every URL still works as a full page (phones, no-JS, crawlers); the modal is additive, not a second UI |
 | Auth | `HTTPBasic` + `secrets.compare_digest`, creds from env | Needs TLS in front (Caddy) — required anyway for the OAuth redirect URI |
+| Wizard entry (round 4) | **One** three-step flow — Termin → Post → Vorschau — at `/neu` → `/posts/new` → its preview, each of the first two steps skippable, behind one entry point ("+ Neu") everywhere; the event step writes through `EventDirectory.create_event` rather than the calendar owning its own form | Replaces two separate flows ("Termin anlegen" / "Post erstellen") that did the same two things in a different order; owner: "one wizard, one modal" |
 
 ## Domain model
 
@@ -68,9 +69,12 @@ LinkedEvent   id, title, starts_at, detail_url, removed
 Ports (`domain/ports.py`): `PostSource` (has a `source` name, fetches with a
 `Token`), `PostSink`, `MediaGateway`, `AuthGateway` (has a `source` name), the
 five repositories (`PostRepository`, `DeliveryRepository`, `PreviewRepository`,
-`TokenRepository`, `DraftRepository`), `EventDirectory` (read-only window onto
-the calendar context's events, keyed by post — `for_posts(post_ids)`),
-`ImageProcessor` (`normalise(data) -> DraftImage`, sync/CPU-bound),
+`TokenRepository`, `DraftRepository`), `EventDirectory` (window onto the
+calendar context's events, keyed by post — `for_posts(post_ids)`,
+`compose_hint(event_id)`; plus the write side: `link(event_id, post_id)`, and
+round 4's unified-wizard support `event_form(post_id) -> EventFormOptions |
+None` and `create_event(request, post_id) -> LinkedEvent`, raising
+`EventCreationError`), `ImageProcessor` (`normalise(data) -> DraftImage`, sync/CPU-bound),
 `MediaPublisher` (`publish_images(token, image_urls, caption) -> media_id`,
 `fetch_post(token, post_id) -> Post` — what publishes a draft to a source and
 reads the result back), and `UnitOfWork` / `UnitOfWorkFactory`.
@@ -268,8 +272,15 @@ src/diffus/
                                     #   cases and, for `.link()`, its LinkEventPost command
     presentation/
       services.py                 # typed Services dataclass handed to routes via Depends
-      routes.py, display.py, templates/            # context-specific filters + templates; includes the
-                                                     #   compose wizard (/posts/new) and the Freigabe page
+      routes.py, display.py                         # context-specific filters + routes; the whole
+                                                      #   3-step wizard lives here now (GET/POST /neu,
+                                                      #   /posts/new, /posts/new/{draft}), plus Freigabe
+                                                      #   and its setup.html (round 4: "Einrichtung")
+      templates/                                     # index.html, post.html, review.html, setup.html,
+                                                      #   compose.html, compose_preview.html,
+                                                      #   wizard_event.html (the wizard's Termin step),
+                                                      #   _steps.html (the wizard's step indicator partial,
+                                                      #   included by all three wizard pages)
   calendar/                       # second bounded context — sync a shared external calendar,
                                   #   link events to posts, show what's covered and what isn't
     domain/                      # entities (SubCalendar, CalendarEvent, EventLink, LinkablePost, NewEvent,
@@ -284,8 +295,10 @@ src/diffus/
       compose_post.py                               # caption_for_event + GetComposeHint: the caption prefill
                                                       #   crossposting's compose wizard offers for an event
                                                       #   (the wizard itself moved to crossposting; see below)
-      create_event.py                               # CreateEventForPost: the post → event wizard, and the
-                                                      #   standalone "Termin anlegen" form (post_id optional)
+      create_event.py                               # CreateEventForPost: prefill(post_id)/create(post_id, form),
+                                                      #   post_id optional; round 4's only caller is
+                                                      #   crossposting/infrastructure/calendar.py::CalendarEventDirectory
+                                                      #   — no route in this context drives it any more
     infrastructure/
       db/                          # models (Base from shared), repositories, uow.py — mirrors crossposting's
       kalender_digital.py          # KalenderDigitalClient: CalendarGateway (incl. create_event) over
@@ -295,9 +308,13 @@ src/diffus/
                                     #   direction (CrosspostingPublisher) was removed once the compose
                                     #   wizard moved into crossposting itself
     presentation/
-      services.py, routes.py, display.py
-      templates/                   # calendar.html, event.html, link.html, new_event.html — no compose
-                                    #   templates here any more, see crossposting/presentation/templates/
+      services.py, routes.py, display.py            # routes.py: GET /calendar/events/new is now only a
+                                                      #   redirect to crossposting's /neu (round 4) — no
+                                                      #   POST route or event form lives in this context
+                                                      #   any more; CalendarServices.create_event stays
+                                                      #   (CalendarEventDirectory is the one caller left)
+      templates/                   # calendar.html, event.html, link.html — the event form moved to
+                                    #   crossposting/presentation/templates/wizard_event.html (round 4)
 alembic/                          # 0001 initial, 0002 previews, 0003 destinations and sources, 0004 calendar,
                                    #   0005 drafts and scopes, 0006 Freigabe and channels
 ```
@@ -347,7 +364,7 @@ rules that govern every context from here on:
    in a context's `infrastructure/` may call another context's
    `application/` use cases — reads *and* commands too — because the
    application layer of a context is its public API. It runs both ways, but
-   asymmetrically, because the compose wizard now lives entirely in
+   asymmetrically, because the whole wizard now lives entirely in
    crossposting rather than being driven from the calendar:
    `calendar/infrastructure/crossposting.py::CrosspostingPostCatalog` is a
    **read-only** adapter over crossposting's `GetOverview`/`GetPostDetail`
@@ -355,10 +372,13 @@ rules that govern every context from here on:
    `CrosspostingPublisher` that used to drive crossposting's drafting
    commands was removed once the wizard moved);
    `crossposting/infrastructure/calendar.py::CalendarEventDirectory` reads
-   the calendar's linked events **and** issues one command the other way,
-   `.link(event_id, post_id)` over the calendar's `LinkEventPost`, so a post
-   published from `/posts/new?event=<id>` links itself back to that event
-   without crossposting ever importing the calendar's domain.
+   the calendar's linked events **and** issues commands the other way: round
+   3's `.link(event_id, post_id)` over the calendar's `LinkEventPost`, so a
+   post published from `/posts/new?event=<id>` links itself back to that
+   event, and round 4's `.create_event(request, post_id)` over
+   `CreateEventForPost`, so the unified wizard's own Termin step
+   (`GET`/`POST /neu`) writes a calendar event without crossposting ever
+   importing the calendar's domain either way.
 4. One FastAPI app, one Alembic history, one `Services` per context mounted
    under its own router prefix.
 

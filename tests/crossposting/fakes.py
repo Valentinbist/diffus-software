@@ -24,8 +24,10 @@ from diffus.crossposting.domain.entities import (
     Destination,
     DraftImage,
     DraftStatus,
+    EventFormOptions,
     LinkedEvent,
     MediaFile,
+    NewEventRequest,
     Post,
     PostDraft,
     Preview,
@@ -315,10 +317,17 @@ class FakeEventDirectory:
         self,
         mapping: dict[str, list[LinkedEvent]] | None = None,
         hints: dict[str, ComposeHint] | None = None,
+        event_form: EventFormOptions | None = None,
+        fail: Exception | None = None,
     ) -> None:
         self.mapping = mapping or {}
         self.hints = hints or {}
+        # Not `self.event_form`: that name is the method below, and an
+        # instance attribute of the same name would shadow it.
+        self._event_form_options = event_form
+        self.fail = fail
         self.links: list[tuple[str, str]] = []
+        self.created: list[tuple[NewEventRequest, str | None]] = []
 
     async def for_posts(self, post_ids: Sequence[str]) -> dict[str, list[LinkedEvent]]:
         return {post_id: self.mapping[post_id] for post_id in post_ids if post_id in self.mapping}
@@ -328,6 +337,25 @@ class FakeEventDirectory:
 
     async def link(self, event_id: str, post_id: str) -> None:
         self.links.append((event_id, post_id))
+
+    async def event_form(self, post_id: str | None) -> EventFormOptions | None:
+        if self._event_form_options is None:
+            return None
+        if self._event_form_options.post_id is None and post_id is not None:
+            return dataclasses.replace(self._event_form_options, post_id=post_id)
+        return self._event_form_options
+
+    async def create_event(self, request: NewEventRequest, post_id: str | None) -> LinkedEvent:
+        if self.fail is not None:
+            raise self.fail
+        self.created.append((request, post_id))
+        n = len(self.created)
+        return LinkedEvent(
+            id=f"new-{n}",
+            title=request.title,
+            starts_at=datetime.combine(request.day, request.start, tzinfo=UTC),
+            detail_url=f"/calendar/events/new-{n}",
+        )
 
 
 class FakeAuth:

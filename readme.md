@@ -63,10 +63,10 @@ app or one the poll just found on Instagram — waits on **/freigabe**
 ("Freigabe" in the header, with a live count badge) until someone approves
 it, per channel:
 
-- A **channel's own auto-publish switch** (Social Posts → **Kanäle**, one
-  checkbox per channel — Instagram and each Telegram chat) skips the queue
-  for that channel. It's off for every channel by default, so switch on the
-  ones that should go out immediately; the rest still queue.
+- A **channel's own auto-publish switch** (Freigabe → **Einrichtung** →
+  **Kanäle**, one checkbox per channel — Instagram and each Telegram chat)
+  skips the queue for that channel. It's off for every channel by default,
+  so switch on the ones that should go out immediately; the rest still queue.
 - A **composed post** is approved as a whole: pick its targets on
   `/freigabe` and click **Freigeben** (or **Ablehnen** to discard it).
 - A **post the poll found on Instagram** queues per target: approve the
@@ -75,24 +75,43 @@ it, per channel:
   keeps retrying on its own schedule regardless of the switch, since it was
   already approved.
 
-## The two wizards
+## The wizard
 
-- **Post erstellen** (`/posts/new`, or `?event={id}` from an event's page or
-  the calendar toolbar): a caption prefilled from the linked event when
-  there is one (date, time, room, description), up to 10 images, and a
-  choice of targets — Instagram and/or any Telegram chat. If every chosen
-  target is on auto-publish it goes out immediately; otherwise it lands on
-  `/freigabe`. A Telegram-only post becomes a first-class `diffus:<draft
-  id>` post in the feed, exactly like an Instagram one, and — when it was
-  started from an event — is linked back to it automatically.
-- **Termin anlegen** (`/calendar/events/new`, or `?post={id}` from a post's
-  page): prefills a title (the caption's first line) and a date (a mention
-  like "12.9." in the caption, or the posted day otherwise) when started
-  from a post, or blank defaults from the calendar toolbar; writes a new
-  event straight into kalender.digital, linked back to the post if there
-  was one.
+One flow, three steps — **Termin → Post → Vorschau** — behind a single
+prominent entry point ("+ Neu" in the header; "Neu" on Social Posts and the
+calendar toolbar), each of the first two steps skippable. All three are
+ordinary pages that also open as one modal on desktop, with a step
+indicator (`1 Termin · 2 Post · 3 Vorschau`) marking where you are.
 
-Both are ordinary pages that also open as a modal on desktop.
+- **1 Termin** (`/neu`, or `?post={id}` from a post's page's "Termin
+  anlegen"): prefills a title (the caption's first line) and a date (a
+  mention like "12.9." in the caption, or the posted day otherwise) when
+  started from a post, or blank defaults otherwise; writes the event
+  straight into kalender.digital. **Ohne Termin weiter** skips to step 2.
+  Without the calendar context, "+ Neu" goes straight to step 2 — there is
+  no Termin step to show. Started from a post, step 1 links that post to
+  the new event itself and the wizard is done: it finishes on the event
+  page rather than continuing to step 2.
+- **2 Post** (`/posts/new`, reached with `?event={id}` after step 1 or from
+  an event's page's "Post erstellen"): a caption prefilled from the linked
+  event when there is one (date, time, room, description), up to 10 images,
+  and a choice of targets — Instagram and/or any Telegram chat. **Ohne Post
+  fertig** skips to the event page.
+- **3 Vorschau** (`/posts/new/{draft}`): review, then publish. If every
+  chosen target is on auto-publish it goes out immediately; otherwise it
+  lands on `/freigabe`. A Telegram-only post becomes a first-class
+  `diffus:<draft id>` post in the feed, exactly like an Instagram one, and —
+  when it was started from an event — is linked back to it automatically.
+
+A post polled from Instagram carries an "Instagram ✓" line (linking to its
+permalink) alongside its Telegram deliveries, in the post modal and the
+overview — it was never "delivered" there by the app, but the fact belongs
+on the same list as the channels the app did send it to.
+
+Instagram's connection status, the per-channel auto-publish switches and the
+`PUBLIC_BASE_URL` readiness hint live on their own page, **/freigabe/setup**
+("Einrichtung"), reachable from the Freigabe queue; Social Posts itself keeps
+only a one-line sync status and a link there when something needs attention.
 
 ## Dev setup
 

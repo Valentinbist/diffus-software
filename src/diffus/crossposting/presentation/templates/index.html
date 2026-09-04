@@ -8,7 +8,6 @@
 {% if ov.token %}
   {% set days_left = (ov.token.expires_at - now).days %}
   {% set refresh_failed = last_run is not none and last_run.refresh_error %}
-  {% set token_warning = days_left <= 14 or refresh_failed %}
 
   {% if last_run is none %}
     <p class="body status">Verbunden. Der erste Abgleich steht noch aus.</p>
@@ -20,32 +19,26 @@
   {% endif %}
 
   {% if refresh_failed %}
-    <p class="meta attention">Token-Auffrischung fehlgeschlagen – bitte neu verbinden.</p>
-  {% endif %}
-  {% if days_left < 0 %}
-    <p class="meta attention">Token ist abgelaufen – bitte neu verbinden.</p>
+    <p class="meta attention">Token-Auffrischung fehlgeschlagen → <a href="/freigabe/setup">Einrichtung</a></p>
+  {% elif days_left < 0 %}
+    <p class="meta attention">Token ist abgelaufen → <a href="/freigabe/setup">Einrichtung</a></p>
   {% elif days_left <= 14 %}
-    <p class="meta attention">Token läuft {% if days_left == 0 %}heute{% elif days_left == 1 %}morgen{% else %}in {{ days_left }} Tagen{% endif %} ab.</p>
-  {% else %}
-    <p class="meta">Token gültig bis {{ ov.token.expires_at|day(now) }}.</p>
-  {% endif %}
-  {% if not ov.token.can_publish %}
-    <p class="meta attention">Instagram neu verbinden, um Veröffentlichen freizuschalten.</p>
+    <p class="meta attention">Token läuft {% if days_left == 0 %}heute{% elif days_left == 1 %}morgen{% else %}in {{ days_left }} Tagen{% endif %} ab → <a href="/freigabe/setup">Einrichtung</a></p>
+  {% elif not ov.token.can_publish %}
+    <p class="meta attention">Instagram neu verbinden, um Veröffentlichen freizuschalten → <a href="/freigabe/setup">Einrichtung</a></p>
   {% endif %}
 
   <div class="actions">
-    <a class="btn btn-solid" href="/posts/new" data-modal>Post erstellen</a>
-    <form method="post" action="/sync"><button type="submit" class="btn">Jetzt abgleichen</button></form>
-    {% if token_warning or not ov.token.can_publish %}<a class="btn" href="/oauth/login">Neu verbinden</a>{% endif %}
+    <a class="btn btn-solid" href="/neu" data-modal>Neu</a>
   </div>
 {% else %}
   <div class="notice">
     <p class="body">Instagram ist noch nicht verbunden. Sobald der Account verbunden ist, landet jeder neue Post im Telegram-Kanal.</p>
     <div class="actions">
-      <a class="btn btn-solid" href="/posts/new" data-modal>Post erstellen</a>
-      <a class="btn" href="/oauth/login">Instagram verbinden</a>
+      <a class="btn btn-solid" href="/neu" data-modal>Neu</a>
     </div>
   </div>
+  <p class="meta attention">Instagram ist nicht verbunden → <a href="/freigabe/setup">Einrichtung</a></p>
 {% endif %}
 
 {% if review_count > 0 %}
@@ -53,26 +46,6 @@
   <p class="body">{{ review_count }} {{ "Post wartet" if review_count == 1 else "Posts warten" }} auf Freigabe. <a href="/freigabe">Zur Freigabe</a></p>
 </div>
 {% endif %}
-
-<section class="details">
-  <p class="eyebrow">Kanäle</p>
-  <form method="post" action="/channels" class="stack">
-    <label>
-      <input type="checkbox" name="auto" value="{{ channels.instagram.destination }}" {% if channels.instagram.auto_publish %}checked{% endif %}>
-      Instagram – automatisch veröffentlichen
-    </label>
-    {% set hint = channels.instagram|instagram_hint %}
-    {% if hint %}<p class="meta">{{ hint }}</p>{% endif %}
-    {% for t in channels.telegram %}
-    <label>
-      <input type="checkbox" name="auto" value="{{ t.destination }}" {% if t.auto_publish %}checked{% endif %}>
-      {{ t.label }} – automatisch veröffentlichen
-    </label>
-    {% endfor %}
-    <button type="submit" class="btn">Speichern</button>
-  </form>
-  <p class="meta">Ohne Haken wartet ein Post für diesen Kanal auf Freigabe.</p>
-</section>
 
 <p class="pills">
   {% for value, label in source_pills %}
@@ -106,19 +79,16 @@
       <span class="source">{{ post.source|source_label }}</span>
       {% set caption = post.caption|summary %}
       <p class="body"><a class="plain" href="/posts/{{ post.id }}" data-modal>{% if caption %}{{ caption }}{% else %}<span class="muted">Ohne Text</span>{% endif %}</a></p>
+      <p class="meta">{{ post.posted_at|when(now) }}</p>
 
-      {% if deliveries|length == 1 %}
-        {% set d = deliveries[0] %}
-        <p class="meta{% if d.status.value == "failed" %} attention{% endif %}">{{ post.posted_at|when(now) }} – {{ d|delivery_label(multi_target) }}</p>
-      {% else %}
-        <p class="meta">{{ post.posted_at|when(now) }}</p>
-        {% if deliveries %}
-        <div class="targets">
-          {% for d in deliveries %}
-          <span class="meta{% if d.status.value == "failed" %} attention{% endif %}">{{ d|delivery_label(multi_target) }}</span>
-          {% endfor %}
-        </div>
-        {% endif %}
+      {% set lines = view|channel_lines(multi_target) %}
+      {% if lines %}
+      <div class="targets">
+        {% for line in lines %}
+        {% if line.href %}<a class="meta{% if line.attention %} attention{% endif %}" href="{{ line.href }}" target="_blank" rel="noopener">{{ line.label }}</a>
+        {% else %}<span class="meta{% if line.attention %} attention{% endif %}">{{ line.label }}</span>{% endif %}
+        {% endfor %}
+      </div>
       {% endif %}
 
       {% for e in view.events %}<p class="meta">→ <a class="plain" href="{{ e.detail_url }}" data-modal>{{ e.title or "Ohne Titel" }}, {{ e.starts_at|day(now) }}</a>{% if e.removed %} (gelöscht){% endif %}</p>{% endfor %}

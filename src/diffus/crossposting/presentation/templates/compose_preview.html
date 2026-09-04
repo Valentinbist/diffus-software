@@ -6,6 +6,8 @@
 {% block content %}
 <p class="meta kicker"><a class="plain back" href="/posts/new{% if hint %}?event={{ hint.event_id }}{% endif %}">« Zurück</a></p>
 <h1 class="h1">Vorschau</h1>
+{% set step = 3 %}
+{% include "_steps.html" with context %}
 
 <div class="gallery{% if image_urls|length == 1 %} single{% endif %}">
   {% for url in image_urls %}

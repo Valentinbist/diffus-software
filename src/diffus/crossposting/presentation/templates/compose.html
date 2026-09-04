@@ -6,6 +6,8 @@
 {% block content %}
 <p class="meta kicker"><a class="plain back" href="{{ cancel_url }}">« Zurück</a></p>
 <h1 class="h1">Post erstellen</h1>
+{% set step = 2 %}
+{% include "_steps.html" with context %}
 {% if hint %}<p class="meta">Für Termin: <a class="plain" href="{{ hint.detail_url }}" data-modal>{{ hint.title }}</a></p>{% endif %}
 
 {% if error %}
@@ -37,6 +39,7 @@
 
   <div class="actions">
     <button type="submit" class="btn btn-solid">Weiter</button>
+    {% if hint %}<a class="btn" href="{{ hint.detail_url }}">Ohne Post fertig</a>{% endif %}
     <a class="btn" href="{{ cancel_url }}">Abbrechen</a>
   </div>
 </form>

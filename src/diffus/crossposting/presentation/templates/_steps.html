@@ -1,0 +1,5 @@
+{% if calendar_enabled %}
+<p class="meta steps">{% if step == 1 %}<span class="current">1 Termin</span>{% else %}1 Termin{% endif %} · {% if step == 2 %}<span class="current">2 Post</span>{% else %}2 Post{% endif %} · {% if step == 3 %}<span class="current">3 Vorschau</span>{% else %}3 Vorschau{% endif %}</p>
+{% else %}
+<p class="meta steps">{% if step == 2 %}<span class="current">1 Post</span>{% else %}1 Post{% endif %} · {% if step == 3 %}<span class="current">2 Vorschau</span>{% else %}2 Vorschau{% endif %}</p>
+{% endif %}
