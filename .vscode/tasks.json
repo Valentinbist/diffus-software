@@ -1,0 +1,119 @@
+{
+  // Dev tasks for the diffus.space social posting app.
+  //   Run > Tasks: Run Task  (or bind "workbench.action.tasks.runTask" to a key)
+  //
+  // The two backend stacks are mutually exclusive: both use the compose
+  // project "diffus-software" and both publish :8000, so starting one
+  // recreates the other's containers. Their databases are separate volumes
+  // (pgdata vs pgdata_mocks), so switching never mixes real synced posts
+  // with mock ones — you just can't run both at once.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      // The normal dev stack: real Instagram, kalender.digital and Telegram.
+      // Needs a filled-in .env (see readme.md, Quickstart).
+      "label": "Backend: start (real services)",
+      "type": "shell",
+      "command": "docker compose up --build --remove-orphans",
+      "detail": "app + postgres + web watcher on :8000, talking to the real APIs",
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "docker-compose",
+        "pattern": {
+          "regexp": "^(?:app-1\\s+\\|\\s+)?(ERROR|CRITICAL):\\s+(.*)$",
+          "severity": 1,
+          "message": 2
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*(Container|Building|Creating|Recreating|Starting).*",
+          "endsPattern": ".*(Application startup complete|Uvicorn running on).*"
+        }
+      },
+      "presentation": {
+        "group": "backend",
+        "panel": "dedicated",
+        "reveal": "always",
+        "clear": true
+      },
+      "runOptions": { "instanceLimit": 1 }
+    },
+    {
+      // Same stack, but every external API is faked by mocks/ (port 8100).
+      // Nothing leaves the machine: no real posts, no real Telegram messages,
+      // no writes to the shared kalender.digital calendar.
+      "label": "Backend: start (mocks)",
+      "type": "shell",
+      "command": "docker compose -f docker-compose.yml -f docker-compose.mocks.yml up --build --remove-orphans",
+      "detail": "same stack on :8000 + mocked Instagram/kalender/Telegram on :8100",
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "docker-compose",
+        "pattern": {
+          "regexp": "^(?:app-1\\s+\\|\\s+)?(ERROR|CRITICAL):\\s+(.*)$",
+          "severity": 1,
+          "message": 2
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*(Container|Building|Creating|Recreating|Starting).*",
+          "endsPattern": ".*(Application startup complete|Uvicorn running on).*"
+        }
+      },
+      "presentation": {
+        "group": "backend",
+        "panel": "dedicated",
+        "reveal": "always",
+        "clear": true
+      },
+      "runOptions": { "instanceLimit": 1 }
+    },
+    {
+      // Stops whichever stack is up. Both -f files are passed so the mocks
+      // container is torn down too, whether or not it was started.
+      "label": "Backend: stop",
+      "type": "shell",
+      "command": "docker compose -f docker-compose.yml -f docker-compose.mocks.yml down --remove-orphans",
+      "detail": "stop and remove the containers of both stacks (volumes are kept)",
+      "problemMatcher": [],
+      "presentation": { "group": "backend", "panel": "shared", "reveal": "always" }
+    },
+    {
+      "label": "Backend: logs (app)",
+      "type": "shell",
+      "command": "docker compose logs -f --tail 100 app",
+      "detail": "follow the app container's log",
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "reveal": "always" }
+    },
+    {
+      "label": "Backend: open",
+      "type": "shell",
+      "command": "open http://localhost:8000",
+      "detail": "open the UI in the browser (mock state lives at :8100/_state)",
+      "problemMatcher": [],
+      "presentation": { "panel": "shared", "reveal": "silent", "close": true }
+    },
+    {
+      // What CI runs, minus the frontend build.
+      "label": "Checks: ruff + ty + pytest",
+      "type": "shell",
+      "command": "uv run ruff check . && uv run ty check && uv run pytest -q",
+      "detail": "lint, type-check and test on the host (no containers involved)",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "reveal": "always", "clear": true }
+    },
+    {
+      "label": "Frontend: build",
+      "type": "shell",
+      "command": "npm run check && npm run build",
+      "options": { "cwd": "${workspaceFolder}/web" },
+      "detail": "type-check and build web/ into the app's static/dist",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "reveal": "always", "clear": true }
+    }
+  ]
+}
