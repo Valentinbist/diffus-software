@@ -1,0 +1,14 @@
+# Override for docker-compose.yml: points PUBLIC_BASE_URL at a public tunnel
+# so Instagram can fetch a draft's images from this laptop.
+#
+#   scripts/dev-tunnel.sh          # starts the tunnel and this stack together
+#
+# Instagram's POST /{ig-user-id}/media takes an `image_url` that *Meta's own
+# servers* fetch — it can neither reach http://localhost nor send this app's
+# Basic-auth header, which is why publishing to Instagram is the one flow
+# that needs a real public https address (see docs/architecture.md, Sharp
+# edges). Everything else, Telegram included, works without this file.
+services:
+  app:
+    environment:
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set it, or use scripts/dev-tunnel.sh which does}

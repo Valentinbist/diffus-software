@@ -69,6 +69,37 @@
       "runOptions": { "instanceLimit": 1 }
     },
     {
+      // Publishing to Instagram is the one flow that needs a public https
+      // address: Meta's servers fetch the draft's images themselves, so they
+      // reach neither localhost nor this app's Basic auth. The script opens an
+      // ngrok tunnel and starts the stack pointed at it.
+      "label": "Backend: start (real services + Instagram tunnel)",
+      "type": "shell",
+      "command": "./scripts/dev-tunnel.sh",
+      "detail": "real stack on :8000 behind a public ngrok URL, so Instagram publishing works",
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "docker-compose",
+        "pattern": {
+          "regexp": "^(?:app-1\\s+\\|\\s+)?(ERROR|CRITICAL):\\s+(.*)$",
+          "severity": 1,
+          "message": 2
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*(starting ngrok|Container|Building|Creating|Recreating|Starting).*",
+          "endsPattern": ".*(Application startup complete|Uvicorn running on).*"
+        }
+      },
+      "presentation": {
+        "group": "backend",
+        "panel": "dedicated",
+        "reveal": "always",
+        "clear": true
+      },
+      "runOptions": { "instanceLimit": 1 }
+    },
+    {
       // Stops whichever stack is up. Both -f files are passed so the mocks
       // container is torn down too, whether or not it was started.
       "label": "Backend: stop",

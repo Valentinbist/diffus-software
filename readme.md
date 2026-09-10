@@ -142,15 +142,34 @@ desktop modal JS need an actual `npm run build`.
 ### Testing Instagram publishing locally
 
 Instagram's `/media` endpoint fetches a draft's images itself from
-`PUBLIC_BASE_URL`, and it cannot reach `http://localhost` — so publishing to
-Instagram (not Telegram-only) only works against a real public HTTPS URL. To
-try it from a dev machine, tunnel the local port and point `PUBLIC_BASE_URL`
-at the tunnel instead of restarting anything in production:
+`PUBLIC_BASE_URL`, and it can reach neither `http://localhost` nor this app's
+Basic auth — so publishing to Instagram (not Telegram-only) only works
+against a real public HTTPS URL. One command does the whole thing:
 
 ```sh
-cloudflared tunnel --url http://localhost:8000
-# then, in .env:
-PUBLIC_BASE_URL=https://<the-hostname-cloudflared-printed>
+scripts/dev-tunnel.sh
+```
+
+It opens an ngrok tunnel to `:8000`, waits for its URL, and starts the dev
+stack with `PUBLIC_BASE_URL` pointed at it (`docker-compose.tunnel.yml`);
+Ctrl+C stops both. `PUBLIC_BASE_URL` is passed at startup rather than read
+from `.env` because a free tunnel's hostname changes every run. If you
+already have a tunnel — a reserved ngrok domain, `cloudflared tunnel --url
+http://localhost:8000`, a Tailscale funnel — export `PUBLIC_BASE_URL`
+yourself and the script uses it instead of starting its own.
+
+In VS Code the same thing is **Backend: start (real services + Instagram
+tunnel)** under Run Task.
+
+To check the tunnel is good enough for Meta *without publishing anything*,
+create a media container and watch it finish — a container is not a post,
+and it expires by itself after 24 h:
+
+```sh
+curl -s -X POST "https://graph.instagram.com/v21.0/<ig-user-id>/media" \
+  --data-urlencode "image_url=<PUBLIC_BASE_URL>/media/drafts/<draft>/0?key=<public_key>" \
+  --data-urlencode "access_token=<token>"
+# then poll ?fields=status_code until FINISHED — that means Meta fetched it
 ```
 
 Telegram-only publishing needs none of this and works against plain
