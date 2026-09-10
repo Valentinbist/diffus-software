@@ -344,7 +344,7 @@ with a unique `source` name, emit prefixed post ids, and wire a second
 external API — Instagram (`/graph`, `/api`, `/www`), kalender.digital
 (`/kalender`), Telegram (`/telegram`) — with in-memory seeded state, for
 running the whole app locally without touching any real service (see
-readme.md, "Testing against mocks"). It lives outside `src/diffus` and is
+[development.md](development.md), "Testing against the mocks"). It lives outside `src/diffus` and is
 never imported by it, so it ships in the `dev` Docker image only, never
 `runtime`. `InstagramClient`/`TelegramSink`/`KalenderDigitalClient` all take
 their host(s) as constructor parameters, defaulting to the real ones, which
