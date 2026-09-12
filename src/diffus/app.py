@@ -6,10 +6,12 @@ import functools
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import httpx
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
@@ -26,6 +28,7 @@ from diffus.calendar.application.sync_job import CalendarSyncJob
 from diffus.calendar.infrastructure.crossposting import CrosspostingPostCatalog
 from diffus.calendar.infrastructure.db.uow import SqlCalendarUnitOfWork
 from diffus.calendar.infrastructure.kalender_digital import KalenderDigitalClient
+from diffus.calendar.presentation import display as calendar_display
 from diffus.calendar.presentation.routes import build_templates as build_calendar_templates
 from diffus.calendar.presentation.routes import router as calendar_router
 from diffus.calendar.presentation.services import CalendarServices
@@ -38,6 +41,7 @@ from diffus.crossposting.application.drafts import (
     DiscardDraft,
     GetDraft,
     GetDraftImage,
+    RejectDraft,
     SubmitDraft,
 )
 from diffus.crossposting.application.overview import GetOverview, NoEvents
@@ -49,6 +53,7 @@ from diffus.crossposting.application.resend_delivery import ResendDelivery
 from diffus.crossposting.application.review import (
     ApprovePostDeliveries,
     CountReview,
+    GetReviewHistory,
     GetReviewQueue,
     RejectPostDeliveries,
 )
@@ -63,11 +68,13 @@ from diffus.crossposting.infrastructure.media.downloader import HttpMediaGateway
 from diffus.crossposting.infrastructure.media.fallback import FallbackMediaGateway
 from diffus.crossposting.infrastructure.media.images import PillowImageProcessor
 from diffus.crossposting.infrastructure.telegram.sink import TelegramSink
+from diffus.crossposting.presentation import display as crossposting_display
 from diffus.crossposting.presentation.routes import ServicesDep, build_templates, router
 from diffus.crossposting.presentation.services import Services
+from diffus.shared.automation import Automation, JobStatus
 from diffus.shared.config import get_settings
 from diffus.shared.db.session import make_engine, make_session_factory
-from diffus.shared.scheduler import start_scheduler
+from diffus.shared.scheduler import next_run_time, start_scheduler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -225,15 +232,41 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     known_channels = [INSTAGRAM_CHANNEL, *destinations]
     set_auto_publish = SetAutoPublish(uow=uow, channels=known_channels)
     submit_draft = SubmitDraft(uow=uow, publish=publish_draft, destinations=destinations)
-    approve_draft = ApproveDraft(publish=publish_draft)
+    approve_draft = ApproveDraft(publish=publish_draft, uow=uow)
     review_queue = GetReviewQueue(uow=uow, detail=detail, events=events, destinations=destinations)
     review_count = CountReview(uow=uow)
+    review_history = GetReviewHistory(uow=uow)
     # Shares SyncJob's own lock too: a double-click-safe approve must not run
     # while the poller is mid-tick either (see review.py's docstring).
     approve_post = ApprovePostDeliveries(
         uow=uow, deliver=deliver, destinations=destinations, lock=job.lock
     )
     reject_post = RejectPostDeliveries(uow=uow)
+    reject_draft = RejectDraft(uow=uow)
+
+    # Forward-declared here (built for real further down, inside "if
+    # settings.calendar_enabled") so the `jobs` closure below can read it —
+    # the settings page's automation section needs to know about the
+    # calendar's own sync job too, once it exists (same pattern `tick`
+    # already uses for its own `calendar_services.sync_job.run()` call).
+    calendar_services: CalendarServices | None = None
+    # Same idea for the scheduler, started only after Services is built: a
+    # one-element box the `next_run` closure reads, so it answers None until
+    # `start_scheduler` actually runs.
+    scheduler_box: list[AsyncIOScheduler] = []
+
+    def jobs() -> list[JobStatus]:
+        statuses = [crossposting_display.job_status(job)]
+        if calendar_services is not None:
+            statuses.append(calendar_display.job_status(calendar_services.sync_job))
+        return statuses
+
+    def next_run() -> datetime | None:
+        return next_run_time(scheduler_box[0]) if scheduler_box else None
+
+    automation = Automation(
+        interval_minutes=settings.poll_interval_minutes, jobs=jobs, next_run=next_run
+    )
 
     app.state.services = Services(
         sync_job=job,
@@ -255,12 +288,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         approve_draft=approve_draft,
         review_queue=review_queue,
         review_count=review_count,
+        review_history=review_history,
         approve_post=approve_post,
         reject_post=reject_post,
+        reject_draft=reject_draft,
         events=events,
+        automation=automation,
     )
 
-    calendar_services: CalendarServices | None = None
     if settings.calendar_enabled:
         assert calendar_uow is not None
         assert calendar_gateway is not None
@@ -300,6 +335,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await calendar_services.sync_job.run()
 
     scheduler = start_scheduler(tick, settings.poll_interval_minutes)
+    scheduler_box.append(scheduler)
 
     try:
         yield

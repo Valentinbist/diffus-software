@@ -60,13 +60,14 @@ narrower scope keeps working for reading, but the compose wizard shows
 
 Nothing goes out on its own by default. Every post — one composed in the
 app or one the poll just found on Instagram — waits on **/freigabe**
-("Freigabe" in the header, with a live count badge) until someone approves
+("Freigabe" in the nav, with a live count badge) until someone approves
 it, per channel:
 
-- A **channel's own auto-publish switch** (Freigabe → **Einrichtung** →
-  **Kanäle**, one checkbox per channel — Instagram and each Telegram chat)
-  skips the queue for that channel. It's off for every channel by default,
-  so switch on the ones that should go out immediately; the rest still queue.
+- A **channel's own auto-publish switch** (**Einstellungen** →
+  **Automatisch veröffentlichen**, one checkbox per channel — Instagram and
+  each Telegram chat) skips the queue for that channel. It's off for every
+  channel by default, so switch on the ones that should go out immediately;
+  the rest still queue.
 - A **composed post** is approved as a whole: pick its targets on
   `/freigabe` and click **Freigeben** (or **Ablehnen** to discard it).
 - A **post the poll found on Instagram** queues per target: approve the
@@ -75,21 +76,30 @@ it, per channel:
   keeps retrying on its own schedule regardless of the switch, since it was
   already approved.
 
+`/freigabe` also keeps a **Verlauf** (history) below the queue: every past
+decision — approved, rejected, or auto-published, drafts and polled posts
+alike — newest first, so the queue itself only ever shows what is still
+open.
+
 ## The wizard
 
 One flow, three steps — **Termin → Post → Vorschau** — behind a single
-prominent entry point ("+ Neu" in the header; "Neu" on Social Posts and the
-calendar toolbar), each of the first two steps skippable. All three are
-ordinary pages that also open as one modal on desktop, with a step
-indicator (`1 Termin · 2 Post · 3 Vorschau`) marking where you are.
+prominent entry point: the call-to-action button in the sidebar (the top
+bar on phones), **Neues Event erstellen** with the calendar context on,
+**Neuer Post** without it
+(there is no Termin step to promise then). It is the only "Neu" anywhere in
+the UI; Social Posts and the calendar page have none of their own. Each of
+the wizard's first two steps is skippable. All three are ordinary pages that
+also open as one modal on desktop, with a step indicator (`1 Termin · 2 Post
+· 3 Vorschau`) marking where you are.
 
 - **1 Termin** (`/neu`, or `?post={id}` from a post's page's "Termin
   anlegen"): prefills a title (the caption's first line) and a date (a
   mention like "12.9." in the caption, or the posted day otherwise) when
   started from a post, or blank defaults otherwise; writes the event
   straight into kalender.digital. **Ohne Termin weiter** skips to step 2.
-  Without the calendar context, "+ Neu" goes straight to step 2 — there is
-  no Termin step to show. Started from a post, step 1 links that post to
+  Without the calendar context, the cta goes straight to step 2 —
+  there is no Termin step to show. Started from a post, step 1 links that post to
   the new event itself and the wizard is done: it finishes on the event
   page rather than continuing to step 2.
 - **2 Post** (`/posts/new`, reached with `?event={id}` after step 1 or from
@@ -108,10 +118,12 @@ permalink) alongside its Telegram deliveries, in the post modal and the
 overview — it was never "delivered" there by the app, but the fact belongs
 on the same list as the channels the app did send it to.
 
-Instagram's connection status, the per-channel auto-publish switches and the
-`PUBLIC_BASE_URL` readiness hint live on their own page, **/freigabe/setup**
-("Einrichtung"), reachable from the Freigabe queue; Social Posts itself keeps
-only a one-line sync status and a link there when something needs attention.
+Instagram's connection status, the per-channel auto-publish switches, the
+`PUBLIC_BASE_URL` readiness hint, and a view into the automation itself (how
+often the Instagram and calendar syncs run, when the next one fires, and
+each one's last few runs) all live on their own page, **/einstellungen**
+("Einstellungen", in the nav); Social Posts itself keeps only a one-line
+attention notice pointing there when something needs it.
 
 ## Dev setup
 

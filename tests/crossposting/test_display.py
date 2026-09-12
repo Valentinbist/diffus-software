@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from diffus.crossposting.application.channels import InstagramChannel
+from diffus.crossposting.application.deliver import DeliverPost
 from diffus.crossposting.application.overview import PostView
+from diffus.crossposting.application.refresh_token import EnsureFreshToken
+from diffus.crossposting.application.sync_job import LastRun, SyncJob
+from diffus.crossposting.application.sync_posts import SyncPosts, SyncReport
 from diffus.crossposting.domain.entities import (
     INSTAGRAM_CHANNEL,
     Delivery,
@@ -13,6 +17,8 @@ from diffus.crossposting.domain.entities import (
     MediaItem,
     MediaType,
     Post,
+    ReviewLogEntry,
+    ReviewOutcome,
 )
 from diffus.crossposting.presentation.display import (
     ChannelLine,
@@ -21,13 +27,18 @@ from diffus.crossposting.presentation.display import (
     filter_by_events,
     filter_by_source,
     instagram_hint,
+    job_status,
+    outcome_line,
     sink_label,
     source_label,
     stored_cover,
+    sync_summary,
     target_label,
 )
+from tests.crossposting.fakes import FakeAuth, FakeMedia, FakeSink, FakeUnitOfWork, StaticSource
 
 NOW = datetime(2026, 9, 3, 10, 0, tzinfo=UTC)  # 12:00 in Berlin (CEST)
+TELEGRAM = Destination("telegram", "c1")
 
 
 def test_stored_cover_is_the_first_media_item_with_a_stored_still():
@@ -217,3 +228,131 @@ def test_channel_lines_orders_deliveries_by_destination():
     lines = channel_lines(PostView(post=post, deliveries=[c2, c1]), multi_target=True)
 
     assert [line.label for line in lines] == ["Telegram c1 ✓", "Telegram c2 ✓"]
+
+
+# -- sync_summary ---------------------------------------------------------------
+
+
+def test_sync_summary_with_no_report_is_empty():
+    assert sync_summary(None) == ""
+
+
+def test_sync_summary_with_nothing_to_say():
+    assert sync_summary(SyncReport()) == "Nichts Neues"
+
+
+def test_sync_summary_singular_new_post():
+    assert sync_summary(SyncReport(new=1)) == "1 neuer Post"
+
+
+def test_sync_summary_joins_every_nonzero_part_in_order():
+    report = SyncReport(new=2, sent=1, queued=1, failed=1, skipped=1)
+
+    assert sync_summary(report) == (
+        "2 neue Posts · 1 zugestellt · 1 wartet auf Freigabe · "
+        "1 nicht durchgekommen · 1 übersprungen"
+    )
+
+
+def test_sync_summary_queued_plural():
+    assert sync_summary(SyncReport(queued=3)) == "3 warten auf Freigabe"
+
+
+# -- job_status (crossposting) ---------------------------------------------------
+
+
+def make_sync_job() -> SyncJob:
+    uow = FakeUnitOfWork()
+    media = FakeMedia()
+    deliver = DeliverPost(media=media, sinks={"telegram": FakeSink()}, uow=uow)
+    sync = SyncPosts(
+        source=StaticSource([]), media=media, deliver=deliver, destinations=[TELEGRAM], uow=uow
+    )
+    return SyncJob(sync=sync, refresh=EnsureFreshToken(auth=FakeAuth(), uow=uow))
+
+
+def test_job_status_has_the_instagram_label_and_sync_action():
+    status = job_status(make_sync_job())
+
+    assert status.key == "posts"
+    assert status.label == "Instagram-Abgleich"
+    assert status.sync_action == "/sync"
+    assert status.last is None
+
+
+def test_job_status_runs_are_newest_first_and_summarised():
+    job = make_sync_job()
+    older = LastRun(at=NOW - timedelta(hours=1), report=SyncReport(new=1))
+    newer = LastRun(at=NOW, report=SyncReport(sent=2))
+    job.runs.append(older)
+    job.runs.append(newer)
+
+    status = job_status(job)
+
+    assert [run.at for run in status.runs] == [NOW, NOW - timedelta(hours=1)]
+    assert status.last is not None
+    assert status.last.at == NOW
+    assert status.last.summary == "2 zugestellt"
+
+
+def test_job_status_error_prefers_sync_error_over_refresh_error():
+    job = make_sync_job()
+    job.runs.append(LastRun(at=NOW, sync_error="sync boom", refresh_error="refresh boom"))
+
+    status = job_status(job)
+
+    assert status.last is not None
+    assert status.last.error == "sync boom"
+
+
+def test_job_status_error_names_a_refresh_only_failure():
+    job = make_sync_job()
+    job.runs.append(LastRun(at=NOW, refresh_error="refresh boom"))
+
+    status = job_status(job)
+
+    assert status.last is not None
+    assert status.last.error == "Token-Auffrischung fehlgeschlagen: refresh boom"
+
+
+def test_job_status_no_error_when_the_run_went_through():
+    job = make_sync_job()
+    job.runs.append(LastRun(at=NOW, report=SyncReport()))
+
+    status = job_status(job)
+
+    assert status.last is not None
+    assert status.last.error is None
+
+
+# -- outcome_line -----------------------------------------------------------------
+
+
+def test_outcome_line_rejected_has_no_arrow():
+    entry = ReviewLogEntry.new("draft", ReviewOutcome.REJECTED, "x", (), NOW)
+
+    assert outcome_line(entry, multi_target=False) == "Abgelehnt"
+
+
+def test_outcome_line_approved_names_the_targets_sorted():
+    signal = Destination("signal", "s1")
+    entry = ReviewLogEntry.new(
+        "post", ReviewOutcome.APPROVED, "x", (TELEGRAM, signal), NOW, post_id="p1"
+    )
+
+    # "signal" sorts before "telegram"; multi_target=False bares both labels.
+    assert outcome_line(entry, multi_target=False) == "Freigegeben → Signal, Telegram"
+
+
+def test_outcome_line_auto_says_automatisch_veroeffentlicht():
+    entry = ReviewLogEntry.new("post", ReviewOutcome.AUTO, "x", (TELEGRAM,), NOW, post_id="p1")
+
+    assert outcome_line(entry, multi_target=False) == "Automatisch veröffentlicht → Telegram"
+
+
+def test_outcome_line_instagram_never_shows_its_address_even_multi_target():
+    entry = ReviewLogEntry.new(
+        "draft", ReviewOutcome.APPROVED, "x", (INSTAGRAM_CHANNEL, TELEGRAM), NOW, post_id="p1"
+    )
+
+    assert outcome_line(entry, multi_target=True) == "Freigegeben → Instagram, Telegram c1"

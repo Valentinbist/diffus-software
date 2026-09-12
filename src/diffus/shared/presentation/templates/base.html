@@ -8,18 +8,20 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:ital,wght@0,400;0,500;1,400&family=Playfair+Display:ital,wght@0,400;0,700;1,400&display=swap">
   <link rel="stylesheet" href="{{ assets.css }}">
+  <script>document.documentElement.classList.add("js")</script>
   <script type="module" src="{{ assets.js }}"></script>
 </head>
 <body>
-  <header class="topbar"><div class="topbar-inner">
+  <aside class="side">
     <a class="brand plain" href="/">diffus.space</a>
+    <a class="btn btn-solid cta" href="/neu" data-modal>{% if calendar_enabled %}Neues Event erstellen{% else %}Neuer Post{% endif %}</a>
     <nav class="nav">
       <a class="plain{% if active_page == "posts" %} current{% endif %}" href="/">Social Posts</a>
       <a class="plain{% if active_page == "review" %} current{% endif %}" href="/freigabe">Freigabe <span hx-get="/freigabe/count" hx-trigger="load" hx-swap="innerHTML"></span></a>
       {% if calendar_enabled %}<a class="plain{% if active_page == "calendar" %} current{% endif %}" href="/calendar">Kalender</a>{% endif %}
-      <a class="plain" href="/neu" data-modal>+ Neu</a>
+      <a class="plain{% if active_page == "settings" %} current{% endif %}" href="/einstellungen">Einstellungen</a>
     </nav>
-  </div></header>
+  </aside>
   <main><div class="page">{% block content %}{% endblock %}</div></main>
   <dialog id="modal" hx-boost="true" hx-target="#modal-body" hx-select=".page" hx-swap="innerHTML">
     <div class="modal-inner">

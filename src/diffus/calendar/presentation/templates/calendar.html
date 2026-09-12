@@ -5,22 +5,11 @@
 <p class="meta kicker">Raumkalender</p>
 <h1 class="h1">Kalender</h1>
 
-{% if last_run is not none %}
-  {% if last_run.error %}
-  <p class="body status">Hakt. Der Kalender-Abgleich {{ last_run.at|ago(now) }} ist fehlgeschlagen.</p>
-  <p class="meta">{{ last_run.error|error_text }}</p>
-  {% else %}
-  <p class="body status">Zuletzt abgeglichen {{ last_run.at|ago(now) }}.</p>
-  {% endif %}
+{% if last_run is not none and last_run.error %}
+<p class="meta attention">Der letzte Kalender-Abgleich ist fehlgeschlagen → <a href="/einstellungen">Einstellungen</a></p>
 {% endif %}
 
-<div class="actions">
-  <form method="post" action="/calendar/sync"><button type="submit" class="btn">Jetzt abgleichen</button></form>
-</div>
-
 <div class="toolbar">
-  <a class="btn btn-solid" href="/neu" data-modal>Neu</a>
-
   <p class="meta toggle">
     {% if view == "agenda" %}Liste{% else %}<a class="plain" href="/calendar?view=agenda{{ cal_qs }}{{ status_qs }}">Liste</a>{% endif %}
     ·

@@ -11,18 +11,27 @@ from dataclasses import dataclass
 
 from diffus.crossposting.application.channels import InstagramChannel
 from diffus.crossposting.application.overview import PostView
-from diffus.crossposting.domain.entities import Delivery, DeliveryStatus
+from diffus.crossposting.application.sync_job import LastRun, SyncJob
+from diffus.crossposting.application.sync_posts import SyncReport
+from diffus.crossposting.domain.entities import (
+    Delivery,
+    DeliveryStatus,
+    Destination,
+    ReviewLogEntry,
+    ReviewOutcome,
+)
+from diffus.shared.automation import JobRun, JobStatus
 
 # Sinks the connector knows how to label. A sink with no entry falls back to
 # its name, capitalized, so a new adapter renders sanely before display.py
 # is ever updated for it.
 SINK_LABELS = {"telegram": "Telegram", "instagram": "Instagram"}
 
-EVENT_PILLS = (("all", "Alle"), ("with", "Mit Termin"), ("without", "Ohne Termin"))
+EVENT_OPTIONS = (("all", "Alle"), ("with", "Mit Termin"), ("without", "Ohne Termin"))
 
 # A post's origin: Instagram (polled) or the app's own wizard (source="diffus").
 SOURCE_LABELS = {"instagram": "Instagram", "diffus": "App"}
-SOURCE_PILLS = (("all", "Alle"), ("instagram", "Instagram"), ("diffus", "App"))
+SOURCE_OPTIONS = (("all", "Alle"), ("instagram", "Instagram"), ("diffus", "App"))
 
 
 def source_label(source: str) -> str:
@@ -120,6 +129,69 @@ def channel_lines(view: PostView, multi_target: bool) -> list[ChannelLine]:
         for d in deliveries
     ]
     return lines
+
+
+def sync_summary(report: SyncReport | None) -> str:
+    """Human summary of one Instagram sync run, e.g. '2 neue Posts · 1 zugestellt'.
+
+    None (no report — the run errored before one was produced) summarises as
+    "": a `JobRun`'s summary is never shown for an errored run in the first
+    place (see settings.html), so there is nothing to say.
+    """
+    if report is None:
+        return ""
+    parts: list[str] = []
+    if report.new:
+        parts.append("1 neuer Post" if report.new == 1 else f"{report.new} neue Posts")
+    if report.sent:
+        parts.append(f"{report.sent} zugestellt")
+    if report.queued:
+        parts.append(
+            "1 wartet auf Freigabe"
+            if report.queued == 1
+            else f"{report.queued} warten auf Freigabe"
+        )
+    if report.failed:
+        parts.append(f"{report.failed} nicht durchgekommen")
+    if report.skipped:
+        parts.append(f"{report.skipped} übersprungen")
+    return " · ".join(parts) if parts else "Nichts Neues"
+
+
+def _run_error(run: LastRun) -> str | None:
+    """sync_error wins; a refresh-only failure still needs to be visible somewhere."""
+    if run.sync_error:
+        return run.sync_error
+    if run.refresh_error:
+        return f"Token-Auffrischung fehlgeschlagen: {run.refresh_error}"
+    return None
+
+
+def job_status(job: SyncJob) -> JobStatus:
+    """The Instagram sync job, context-neutral, for the /einstellungen automation section."""
+    runs = tuple(
+        JobRun(at=run.at, error=_run_error(run), summary=sync_summary(run.report))
+        for run in reversed(job.runs)
+    )
+    return JobStatus(key="posts", label="Instagram-Abgleich", runs=runs, sync_action="/sync")
+
+
+def _destination_label(d: Destination, multi_target: bool) -> str:
+    """Same rule as delivery_label: the Instagram channel is never disambiguated by address."""
+    if multi_target and d.sink != "instagram":
+        return f"{sink_label(d.sink)} {d.address}"
+    return sink_label(d.sink)
+
+
+def outcome_line(entry: ReviewLogEntry, multi_target: bool) -> str:
+    """'Freigegeben → Instagram, Telegram' / 'Abgelehnt' / 'Automatisch veröffentlicht → …'."""
+    if entry.outcome == ReviewOutcome.REJECTED:
+        return "Abgelehnt"
+    verb = (
+        "Freigegeben" if entry.outcome == ReviewOutcome.APPROVED else "Automatisch veröffentlicht"
+    )
+    targets = ", ".join(_destination_label(d, multi_target) for d in sorted(entry.targets))
+    return f"{verb} → {targets}" if targets else verb
 
 
 def instagram_hint(ch: InstagramChannel) -> str | None:

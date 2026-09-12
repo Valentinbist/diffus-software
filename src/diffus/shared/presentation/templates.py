@@ -25,6 +25,7 @@ def build_templates(
     templates.env.filters["when"] = lambda dt, now: display.format_when(dt, now, tz)
     templates.env.filters["day"] = lambda dt, now: display.format_day(dt, now, tz)
     templates.env.filters["ago"] = display.format_ago
+    templates.env.filters["ago_future"] = display.format_until
     templates.env.filters["summary"] = display.summary
     templates.env.filters["error_text"] = display.error_text
     # Environment.globals' inferred value type is narrower than `object` (it's seeded

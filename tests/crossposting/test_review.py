@@ -12,6 +12,7 @@ from diffus.crossposting.application.post_detail import GetPostDetail
 from diffus.crossposting.application.review import (
     ApprovePostDeliveries,
     CountReview,
+    GetReviewHistory,
     GetReviewQueue,
     RejectPostDeliveries,
 )
@@ -26,6 +27,7 @@ from diffus.crossposting.domain.entities import (
     Post,
     PostDraft,
     PublishTargets,
+    ReviewOutcome,
 )
 from diffus.crossposting.domain.errors import ConnectorError
 from tests.crossposting.fakes import FakeEventDirectory, FakeMedia, FakeSink, FakeUnitOfWork
@@ -161,6 +163,13 @@ async def test_approve_sends_the_chosen_destination_and_rejects_the_rest():
     assert by_dest[TELEGRAM].status == DeliveryStatus.SENT
     assert by_dest[SIGNAL].status == DeliveryStatus.SKIPPED
 
+    [entry] = await uow.review_log.recent()
+    assert entry.kind == "post"
+    assert entry.outcome == ReviewOutcome.APPROVED
+    assert entry.targets == (TELEGRAM,)
+    assert entry.post_id == "p1"
+    assert entry.summary == "caption"
+
 
 async def test_a_later_poll_sends_nothing_after_approval():
     uow = await make_uow_with_review_post(destinations=(TELEGRAM,))
@@ -186,6 +195,7 @@ async def test_a_second_approve_call_finds_no_review_rows_left():
 
     assert statuses == []
     assert sink.calls == [("p1", "c1")]  # unchanged: no second send
+    assert len(await uow.review_log.recent()) == 1  # the second, empty click logs nothing
 
 
 async def test_a_chosen_but_unconfigured_destination_is_rejected_not_sent():
@@ -223,8 +233,32 @@ async def test_reject_post_deliveries_rejects_every_review_row():
     delivs = await uow.deliveries.for_posts(["p1"])
     assert all(d.status == DeliveryStatus.SKIPPED for d in delivs["p1"])
 
+    [entry] = await uow.review_log.recent()
+    assert entry.kind == "post"
+    assert entry.outcome == ReviewOutcome.REJECTED
+    assert entry.targets == ()
+    assert entry.post_id == "p1"
+
 
 async def test_reject_post_deliveries_on_an_unknown_post_does_nothing():
     uow = FakeUnitOfWork()
 
     await RejectPostDeliveries(uow=uow).run("nope")  # must not raise
+
+    assert await uow.review_log.recent() == []
+
+
+# -- GetReviewHistory ---------------------------------------------------------------
+
+
+async def test_get_review_history_returns_newest_first():
+    uow = await make_uow_with_review_post(destinations=(TELEGRAM,))
+    await ApprovePostDeliveries(
+        uow=uow, deliver=DeliverPost(media=FakeMedia(), sinks={"telegram": FakeSink()}, uow=uow),
+        destinations=[TELEGRAM],
+    ).run("p1", [TELEGRAM])
+
+    history = await GetReviewHistory(uow=uow).run()
+
+    assert len(history) == 1
+    assert history[0].outcome == ReviewOutcome.APPROVED

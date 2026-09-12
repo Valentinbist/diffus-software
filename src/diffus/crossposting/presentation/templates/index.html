@@ -2,43 +2,21 @@
 {% set active_page = "posts" %}
 
 {% block content %}
-<p class="meta kicker">Instagram · Telegram · App</p>
 <h1 class="h1">Social Posts</h1>
 
-{% if ov.token %}
+{% if not ov.token %}
+  <p class="meta attention">Instagram ist nicht verbunden → <a href="/einstellungen">Einstellungen</a></p>
+{% elif last_run is not none and last_run.refresh_error %}
+  <p class="meta attention">Token-Auffrischung fehlgeschlagen → <a href="/einstellungen">Einstellungen</a></p>
+{% elif (ov.token.expires_at - now).days < 0 %}
+  <p class="meta attention">Token ist abgelaufen → <a href="/einstellungen">Einstellungen</a></p>
+{% elif (ov.token.expires_at - now).days <= 14 %}
   {% set days_left = (ov.token.expires_at - now).days %}
-  {% set refresh_failed = last_run is not none and last_run.refresh_error %}
-
-  {% if last_run is none %}
-    <p class="body status">Verbunden. Der erste Abgleich steht noch aus.</p>
-  {% elif last_run.sync_error %}
-    <p class="body status">Hakt. Der Abgleich {{ last_run.at|ago(now) }} ist fehlgeschlagen.</p>
-    <p class="meta">{{ last_run.sync_error|error_text }}</p>
-  {% else %}
-    <p class="body status">Läuft. Letzter Abgleich {{ last_run.at|ago(now) }}.</p>
-  {% endif %}
-
-  {% if refresh_failed %}
-    <p class="meta attention">Token-Auffrischung fehlgeschlagen → <a href="/freigabe/setup">Einrichtung</a></p>
-  {% elif days_left < 0 %}
-    <p class="meta attention">Token ist abgelaufen → <a href="/freigabe/setup">Einrichtung</a></p>
-  {% elif days_left <= 14 %}
-    <p class="meta attention">Token läuft {% if days_left == 0 %}heute{% elif days_left == 1 %}morgen{% else %}in {{ days_left }} Tagen{% endif %} ab → <a href="/freigabe/setup">Einrichtung</a></p>
-  {% elif not ov.token.can_publish %}
-    <p class="meta attention">Instagram neu verbinden, um Veröffentlichen freizuschalten → <a href="/freigabe/setup">Einrichtung</a></p>
-  {% endif %}
-
-  <div class="actions">
-    <a class="btn btn-solid" href="/neu" data-modal>Neu</a>
-  </div>
-{% else %}
-  <div class="notice">
-    <p class="body">Instagram ist noch nicht verbunden. Sobald der Account verbunden ist, landet jeder neue Post im Telegram-Kanal.</p>
-    <div class="actions">
-      <a class="btn btn-solid" href="/neu" data-modal>Neu</a>
-    </div>
-  </div>
-  <p class="meta attention">Instagram ist nicht verbunden → <a href="/freigabe/setup">Einrichtung</a></p>
+  <p class="meta attention">Token läuft {% if days_left == 0 %}heute{% elif days_left == 1 %}morgen{% else %}in {{ days_left }} Tagen{% endif %} ab → <a href="/einstellungen">Einstellungen</a></p>
+{% elif last_run is not none and last_run.sync_error %}
+  <p class="meta attention">Der letzte Abgleich ist fehlgeschlagen → <a href="/einstellungen">Einstellungen</a></p>
+{% elif not ov.token.can_publish %}
+  <p class="meta attention">Instagram neu verbinden, um Veröffentlichen freizuschalten → <a href="/einstellungen">Einstellungen</a></p>
 {% endif %}
 
 {% if review_count > 0 %}
@@ -47,18 +25,21 @@
 </div>
 {% endif %}
 
-<p class="pills">
-  {% for value, label in source_pills %}
-  {% if value == source %}<span class="pill current">{{ label }}</span>{% else %}<a class="pill" href="/?source={{ value }}&events={{ events }}">{{ label }}</a>{% endif %}
-  {% endfor %}
-</p>
-{% if calendar_enabled %}
-<p class="pills">
-  {% for value, label in event_pills %}
-  {% if value == events %}<span class="pill current">{{ label }}</span>{% else %}<a class="pill" href="/?source={{ source }}&events={{ value }}">{{ label }}</a>{% endif %}
-  {% endfor %}
-</p>
-{% endif %}
+<form class="filters" method="get" action="/" data-autosubmit>
+  <label>Herkunft
+    <select name="source">
+      {% for value, label in source_options %}<option value="{{ value }}"{% if value == source %} selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select>
+  </label>
+  {% if calendar_enabled %}
+  <label>Termin
+    <select name="events">
+      {% for value, label in event_options %}<option value="{{ value }}"{% if value == events %} selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select>
+  </label>
+  {% endif %}
+  <button type="submit" class="btn nojs">Anwenden</button>
+</form>
 
 <section class="feed">
 {% for view in ov.posts %}

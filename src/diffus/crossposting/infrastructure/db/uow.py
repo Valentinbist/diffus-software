@@ -19,6 +19,7 @@ from diffus.crossposting.infrastructure.db.repositories import (
     SqlDraftRepository,
     SqlPostRepository,
     SqlPreviewRepository,
+    SqlReviewLogRepository,
     SqlTokenRepository,
 )
 
@@ -30,6 +31,7 @@ class SqlUnitOfWork:
     tokens: SqlTokenRepository
     drafts: SqlDraftRepository
     channels: SqlChannelSettingsRepository
+    review_log: SqlReviewLogRepository
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sf = session_factory
@@ -42,6 +44,7 @@ class SqlUnitOfWork:
         self.tokens = SqlTokenRepository(self._session)
         self.drafts = SqlDraftRepository(self._session)
         self.channels = SqlChannelSettingsRepository(self._session)
+        self.review_log = SqlReviewLogRepository(self._session)
         return self
 
     async def __aexit__(

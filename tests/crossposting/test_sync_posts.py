@@ -14,6 +14,7 @@ from diffus.crossposting.domain.entities import (
     MediaItem,
     MediaType,
     Post,
+    ReviewOutcome,
     Token,
 )
 from diffus.crossposting.domain.errors import NotConnectedError
@@ -135,6 +136,15 @@ async def test_new_post_after_bootstrap_is_sent_exactly_once_across_two_runs():
 
     delivs = await uow.deliveries.for_posts(["p2"])
     assert delivs["p2"][0].status == DeliveryStatus.SENT
+
+    # One AUTO entry for the fresh, auto-published send — not a second one
+    # for the third run, which found nothing left to claim.
+    [entry] = await uow.review_log.recent()
+    assert entry.kind == "post"
+    assert entry.outcome == ReviewOutcome.AUTO
+    assert entry.targets == DEFAULT_DESTINATIONS
+    assert entry.post_id == "p2"
+    assert entry.summary == "caption"
 
 
 async def test_failing_sink_marks_failed_retries_then_stops_after_5_attempts():

@@ -7,6 +7,7 @@ from diffus.shared.presentation.display import (
     error_text,
     format_ago,
     format_day,
+    format_until,
     format_when,
     summary,
 )
@@ -40,6 +41,15 @@ def test_ago_picks_the_largest_sensible_unit():
     assert format_ago(NOW - timedelta(hours=2), NOW) == "vor 2 Stunden"
     assert format_ago(NOW - timedelta(days=3), NOW) == "vor 3 Tagen"
     assert format_ago(NOW + timedelta(minutes=5), NOW) == "gerade eben"  # clock skew, not future
+
+
+def test_until_picks_the_largest_sensible_unit():
+    assert format_until(NOW + timedelta(seconds=30), NOW) == "gleich"
+    assert format_until(NOW + timedelta(minutes=1), NOW) == "in 1 Minute"
+    assert format_until(NOW + timedelta(minutes=4), NOW) == "in 4 Minuten"
+    assert format_until(NOW + timedelta(hours=2), NOW) == "in 2 Stunden"
+    assert format_until(NOW + timedelta(days=3), NOW) == "in 3 Tagen"
+    assert format_until(NOW - timedelta(minutes=5), NOW) == "gleich"  # already due, not negative
 
 
 def test_summary_takes_the_first_real_line_and_truncates():

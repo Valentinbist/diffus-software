@@ -107,10 +107,12 @@ async def calendar_page(
 
 
 @router.post("/sync")
-async def sync_now(services: ServicesDep):
+async def sync_now(services: ServicesDep, next: str = Form("/calendar")):
     # Same job the scheduler runs, so a manual sync also surfaces a stale run.
     await services.sync_job.run()
-    return RedirectResponse("/calendar", status_code=303)
+    # Only ever bounce back to one of our own pages — same guard as crossposting's /sync.
+    target = next if next.startswith("/") and not next.startswith("//") else "/calendar"
+    return RedirectResponse(target, status_code=303)
 
 
 # Registered before /events/{event_id} so "link" is never swallowed as an event id.

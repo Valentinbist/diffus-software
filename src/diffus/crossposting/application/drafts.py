@@ -7,12 +7,15 @@ what survives between them.
 
 Freigabe: SubmitDraft is the wizard's targets step. When every chosen
 channel is auto-publish, it hands straight off to PublishDraft, the same as
-before this round; otherwise it queues the draft for a human
-(`PostDraft.submit_for_review`) instead of publishing. ApproveDraft is what
-that human's "Freigeben" click calls — a thin wrapper over PublishDraft,
-since approving *is* publishing with the (possibly edited) targets. There is
-no separate RejectDraft: DiscardDraft already deletes an unpublished draft
-(DRAFT, REVIEW or FAILED), so it serves as the review page's "Ablehnen" too.
+before this round, and logs the result AUTO in `review_log`; otherwise it
+queues the draft for a human (`PostDraft.submit_for_review`) instead of
+publishing. ApproveDraft is what that human's "Freigeben" click calls — a
+thin wrapper over PublishDraft, since approving *is* publishing with the
+(possibly edited) targets, plus its own APPROVED log entry. RejectDraft is
+the Freigabe page's "Ablehnen": unlike DiscardDraft (still the wizard's own
+"Verwerfen", which stays silent — a draft not yet submitted never reached
+the queue in the first place), it only acts on a reviewable draft and logs
+REJECTED before deleting it.
 """
 
 from __future__ import annotations
@@ -33,9 +36,31 @@ from diffus.crossposting.domain.entities import (
     Post,
     PostDraft,
     PublishTargets,
+    ReviewLogEntry,
+    ReviewOutcome,
 )
 from diffus.crossposting.domain.errors import DraftError, InvalidImageError, UploadTooLargeError
 from diffus.crossposting.domain.ports import ImageProcessor, UnitOfWorkFactory
+
+
+async def _log_draft_outcome(
+    uow: UnitOfWorkFactory,
+    draft_id: str,
+    outcome: ReviewOutcome,
+    targets: PublishTargets,
+    post: Post,
+) -> None:
+    """Shared by SubmitDraft's all-auto path and ApproveDraft: one APPROVED/AUTO log entry,
+    in a fresh unit of work after publishing has already committed its own."""
+    async with uow() as u:
+        draft = await u.drafts.get(draft_id)
+        caption = draft.caption if draft is not None else None
+        await u.review_log.add(
+            ReviewLogEntry.new(
+                "draft", outcome, caption, targets.as_destinations(), datetime.now(UTC), post.id
+            )
+        )
+        await u.commit()
 
 
 @dataclass
@@ -151,6 +176,7 @@ class SubmitDraft:
 
         if all_auto(auto, targets):
             post = await self.publish.run(draft_id, targets)
+            await _log_draft_outcome(self.uow, draft_id, ReviewOutcome.AUTO, targets, post)
             return SubmitResult(post=post, queued=False)
 
         draft.submit_for_review(targets)
@@ -165,6 +191,30 @@ class ApproveDraft:
     """The Freigabe page's "Freigeben": publish a queued (or retried) draft with its targets."""
 
     publish: PublishDraft
+    uow: UnitOfWorkFactory
 
     async def run(self, draft_id: str, targets: PublishTargets) -> Post:
-        return await self.publish.run(draft_id, targets)
+        post = await self.publish.run(draft_id, targets)
+        await _log_draft_outcome(self.uow, draft_id, ReviewOutcome.APPROVED, targets, post)
+        return post
+
+
+@dataclass
+class RejectDraft:
+    """The Freigabe page's "Ablehnen": logs REJECTED, then deletes — a no-op for a non-reviewable
+    or missing draft (a second click, or a draft that never reached the queue)."""
+
+    uow: UnitOfWorkFactory
+
+    async def run(self, draft_id: str) -> None:
+        async with self.uow() as uow:
+            draft = await uow.drafts.get(draft_id)
+            if draft is None or not draft.is_reviewable():
+                return
+            await uow.review_log.add(
+                ReviewLogEntry.new(
+                    "draft", ReviewOutcome.REJECTED, draft.caption, (), datetime.now(UTC)
+                )
+            )
+            await uow.drafts.delete(draft_id)
+            await uow.commit()

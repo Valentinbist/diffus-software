@@ -1,8 +1,8 @@
 """SQLAlchemy 2.0 declarative models.
 
 Mirrors alembic/versions/0001_initial.py, 0002_previews.py,
-0003_destinations_and_sources.py, 0005_drafts_and_scopes.py and
-0006_freigabe_and_channels.py exactly.
+0003_destinations_and_sources.py, 0005_drafts_and_scopes.py,
+0006_freigabe_and_channels.py and 0007_review_log.py exactly.
 """
 
 from __future__ import annotations
@@ -152,3 +152,25 @@ class ChannelSettingRow(Base):
 
     destination: Mapped[str] = mapped_column(String(100), primary_key=True)
     auto_publish: Mapped[bool] = mapped_column(Boolean, nullable=False)
+
+
+class ReviewLogRow(Base):
+    """One append-only Freigabe decision or auto-publish.
+
+    Mirrors alembic/versions/0007_review_log.py. `post_id` has no foreign
+    key, same reasoning as `post_drafts.post_id`: a rejected draft never
+    becomes a post, so the column has to tolerate "never was one", not just
+    "not yet".
+    """
+
+    __tablename__ = "review_log"
+    __table_args__ = (Index("ix_review_log_at", "at"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    post_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    # List of Destination text forms ("telegram:-100…"), () for a rejected draft.
+    targets: Mapped[list[str]] = mapped_column(JSONB, nullable=False)

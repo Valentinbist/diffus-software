@@ -184,24 +184,57 @@ a:hover, a:focus { color: var(--text-muted); }
 .delivery .meta { margin-top: 2px; }
 .delivery form { margin-top: 10px; }
 
-/* -- Round 2: header bar, rows as boxes, modals, filter pills ------------- */
+/* -- The shell (round 6): a sidebar on wide screens; on narrow ones a one-row
+   top bar (brand + cta) and the nav as a bottom tab bar. Nothing ever wraps
+   or clips — the owner's complaint about the two-row header. 900px is the
+   same breakpoint main.ts uses for the modal, so "desktop" means one thing. */
 
-.topbar { border-bottom: 1px solid var(--border-subtle); }
-.topbar-inner {
-  box-sizing: border-box;
-  max-width: var(--width-default);
-  margin: 0 auto;
-  padding: 14px var(--space-horizontal);
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px 18px;
-}
 .brand { font: 400 var(--font-size-sm)/1 var(--font-display); text-decoration: none; }
-.nav { display: flex; gap: 18px; margin: 0; font-size: var(--font-size-xs); color: var(--text-muted); }
+.nav { display: flex; margin: 0; font-size: var(--font-size-xs); color: var(--text-muted); }
 .nav .current { color: var(--text-body); }
+.cta { padding: 0.5em 1em; font-size: var(--font-size-xs); text-align: center; }
 main { padding: 40px var(--space-horizontal) 40px; }
+
+@media (min-width: 900px) {
+  body { display: grid; grid-template-columns: 240px minmax(0, 1fr); min-height: 100vh; }
+  .side {
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    box-sizing: border-box;
+    padding: 30px var(--space-horizontal);
+    border-right: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+  .side .cta { display: block; }
+  .nav { flex-direction: column; gap: 12px; font-size: var(--font-size-sm); }
+}
+@media (max-width: 899px) {
+  .side {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px var(--space-horizontal);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .side .cta { flex: none; }
+  .nav {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 5;
+    justify-content: space-around;
+    align-items: center;
+    padding: 12px 8px calc(12px + env(safe-area-inset-bottom));
+    background: var(--surface-page);
+    border-top: 1px solid var(--border-subtle);
+  }
+  main { padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
+}
 
 .row {
   display: flex;
@@ -233,6 +266,34 @@ main { padding: 40px var(--space-horizontal) 40px; }
   background: var(--diffus-white);
   border-color: var(--diffus-white);
 }
+
+/* Filters (round 6): labelled selects on one line — "Herkunft", "Termin" —
+   so the filter says what it filters, and a phone shows a native picker
+   instead of a clipped row of pills. With JS the form submits itself on
+   change; without it the "Anwenden" button is there. */
+.filters { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; margin-top: 18px; }
+.filters label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+}
+.filters select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 4px 28px 4px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-button);
+  background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23fff' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 11px center;
+  color: var(--text-body);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  cursor: pointer;
+}
+.filters select option { color: var(--text-body); background: var(--surface-raised); }
+.js .nojs { display: none; }
 
 /* The modal: htmx swaps a detail page's .page into #modal-body; a <dialog>
    on the same raised surface as rows and the toolbar. Phones never open it —
@@ -279,6 +340,8 @@ main { padding: 40px var(--space-horizontal) 40px; }
 }
 
 .stack > * + * { margin-top: 14px; }
+/* A checkbox row is a full-width tap target, never inline next to a button. */
+.stack > label { display: block; }
 textarea, input[type="text"], input[type="date"], input[type="time"] {
   box-sizing: border-box;
   width: 100%;
@@ -287,4 +350,22 @@ textarea, input[type="text"], input[type="date"], input[type="time"] {
   border: 1px solid var(--border-default);
   padding: 8px 10px;
   font: inherit;
+}
+
+/* -- Round 5: settings page, Freigabe history, mobile polish ------------------ */
+
+.job { padding: 12px 0; border-bottom: 1px solid var(--border-subtle); }
+.job:last-child { border-bottom: none; }
+.job form { margin-top: 10px; }
+.runs { margin-top: 10px; }
+.runs summary { cursor: pointer; }
+.runs p.meta { margin-top: 6px; }
+
+.log { padding: 10px 0; border-bottom: 1px solid var(--border-subtle); }
+.log:last-child { border-bottom: none; }
+
+@media (max-width: 480px) {
+  .page .actions .btn { flex: 1 1 auto; }
+  main { padding-top: 24px; }
+  .h1 { font-size: 24px; }
 }

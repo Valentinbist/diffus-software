@@ -7,7 +7,12 @@ from datetime import UTC, datetime
 
 import pytest
 
-from diffus.crossposting.application.drafts import ApproveDraft, DiscardDraft, SubmitDraft
+from diffus.crossposting.application.drafts import (
+    ApproveDraft,
+    DiscardDraft,
+    RejectDraft,
+    SubmitDraft,
+)
 from diffus.crossposting.application.publish_draft import PublishDraft
 from diffus.crossposting.domain.entities import (
     INSTAGRAM_CHANNEL,
@@ -16,6 +21,7 @@ from diffus.crossposting.domain.entities import (
     DraftStatus,
     PostDraft,
     PublishTargets,
+    ReviewOutcome,
 )
 from diffus.crossposting.domain.errors import DraftError
 from tests.crossposting.fakes import (
@@ -73,6 +79,13 @@ async def test_all_chosen_channels_auto_publishes_immediately():
     stored = await uow.drafts.get(draft.id)
     assert stored is not None
     assert stored.status == DraftStatus.PUBLISHED
+
+    [entry] = await uow.review_log.recent()
+    assert entry.kind == "draft"
+    assert entry.outcome == ReviewOutcome.AUTO
+    assert entry.targets == (TELEGRAM,)
+    assert entry.post_id == result.post.id
+    assert entry.summary == "Hallo"
 
 
 async def test_a_non_auto_channel_queues_for_review_instead_of_publishing():
@@ -145,7 +158,7 @@ async def test_approve_draft_publishes_with_the_given_targets():
     draft = make_draft(status=DraftStatus.REVIEW)
     draft.targets = PublishTargets(instagram=False, destinations=(TELEGRAM,))
     _submit, publish, uow = await seed(draft)
-    approve = ApproveDraft(publish=publish)
+    approve = ApproveDraft(publish=publish, uow=uow)
 
     post = await approve.run(draft.id, PublishTargets(instagram=False, destinations=(SIGNAL,)))
 
@@ -154,6 +167,13 @@ async def test_approve_draft_publishes_with_the_given_targets():
     assert stored is not None
     assert stored.status == DraftStatus.PUBLISHED
     assert stored.targets == PublishTargets(instagram=False, destinations=(SIGNAL,))
+
+    [entry] = await uow.review_log.recent()
+    assert entry.kind == "draft"
+    assert entry.outcome == ReviewOutcome.APPROVED
+    assert entry.targets == (SIGNAL,)
+    assert entry.post_id == post.id
+    assert entry.summary == "Hallo"
 
 
 # -- DiscardDraft -----------------------------------------------------------------
@@ -189,3 +209,48 @@ async def test_discard_of_an_unknown_draft_does_nothing():
     discard = DiscardDraft(uow=uow)
 
     await discard.run("nope")  # must not raise
+
+
+# -- RejectDraft -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("status", [DraftStatus.REVIEW, DraftStatus.FAILED])
+async def test_reject_draft_deletes_and_logs_a_reviewable_draft(status):
+    draft = make_draft(status=status)
+    draft.targets = PublishTargets(instagram=False, destinations=(TELEGRAM,))
+    uow = FakeUnitOfWork(drafts=FakeDrafts())
+    await uow.drafts.add(draft)
+    await uow.commit()
+    reject = RejectDraft(uow=uow)
+
+    await reject.run(draft.id)
+
+    assert await uow.drafts.get(draft.id) is None
+    [entry] = await uow.review_log.recent()
+    assert entry.kind == "draft"
+    assert entry.outcome == ReviewOutcome.REJECTED
+    assert entry.targets == ()
+    assert entry.post_id is None
+    assert entry.summary == "Hallo"
+
+
+async def test_reject_draft_on_a_non_reviewable_draft_is_a_no_op():
+    draft = make_draft(status=DraftStatus.DRAFT)  # never submitted: not reviewable
+    uow = FakeUnitOfWork(drafts=FakeDrafts())
+    await uow.drafts.add(draft)
+    await uow.commit()
+    reject = RejectDraft(uow=uow)
+
+    await reject.run(draft.id)
+
+    assert await uow.drafts.get(draft.id) is not None  # untouched
+    assert await uow.review_log.recent() == []  # nothing logged
+
+
+async def test_reject_draft_on_a_missing_draft_is_a_no_op():
+    uow = FakeUnitOfWork(drafts=FakeDrafts())
+    reject = RejectDraft(uow=uow)
+
+    await reject.run("nope")  # must not raise
+
+    assert await uow.review_log.recent() == []

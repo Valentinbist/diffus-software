@@ -159,13 +159,13 @@ Telegram-only publishing needs none of this and works against plain
 
 The token lives in the `tokens` table, not in `.env` — the `IG_TOKEN` key some
 `.env` files still carry is dead config the app ignores. The supported way to
-refresh it is clicking **Instagram verbinden** on `/freigabe/setup`, which runs
+refresh it is clicking **Instagram verbinden** on `/einstellungen`, which runs
 the OAuth flow and records the granted scopes.
 
 That `scopes` column is what gates publishing: `Token.can_publish` looks for
 `instagram_business_content_publish` in it. A token connected before that
-scope existed reads fine but cannot publish, and the setup page says so until
-you reconnect. To check what a token can actually do:
+scope existed reads fine but cannot publish, and the settings page says so
+until you reconnect. To check what a token can actually do:
 
 ```sh
 curl -s -G "https://graph.instagram.com/v21.0/me" \

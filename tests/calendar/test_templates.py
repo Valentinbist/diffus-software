@@ -118,11 +118,11 @@ def test_agenda_view_shows_the_day_heading_time_sub_calendar_dot_and_post_status
     assert "checked" in html
     # Jinja autoescapes "&" to "&amp;" in attribute values, as valid HTML requires.
     assert 'href="/calendar?view=month&amp;cal=5298948">Monat' in html
-    assert "Jetzt abgleichen" in html
-    assert 'href="/neu" data-modal>Neu' in html
+    assert "Jetzt abgleichen" not in html  # moved to /einstellungen (round 5)
+    assert '<a class="btn btn-solid" href="/neu" data-modal>Neu</a>' not in html  # header cta only
 
 
-def test_agenda_status_line_shows_a_redacted_sync_error():
+def test_agenda_status_line_shows_one_attention_line_pointing_to_settings():
     error = (
         f"Server error '500' for url "
         f"'https://api.kalender.digital/event?capabilityId={TOKEN}&startDate=2026-08-01'"
@@ -131,9 +131,15 @@ def test_agenda_status_line_shows_a_redacted_sync_error():
         agenda_context(last_run=CalendarLastRun(at=NOW - timedelta(minutes=5), error=error))
     )
 
-    assert "ist fehlgeschlagen" in html
-    assert "capabilityId=…" in html
-    assert TOKEN not in html
+    assert "Der letzte Kalender-Abgleich ist fehlgeschlagen" in html
+    assert 'href="/einstellungen">Einstellungen</a>' in html
+    assert TOKEN not in html  # the error detail itself moved to /einstellungen
+
+
+def test_agenda_shows_no_sync_attention_line_when_the_last_run_went_through():
+    html = render_calendar(agenda_context())
+
+    assert "Kalender-Abgleich ist fehlgeschlagen" not in html
 
 
 # -- month view -------------------------------------------------------------------
@@ -203,7 +209,7 @@ def test_event_page_shows_linked_and_suggested_posts_and_escapes_the_title():
     assert "Datum steht im Text" in html
     assert "Eingetragen von Jona" in html
     assert "Kommt vorbei!" in html
-    assert "<script>" not in html
+    assert "<script>alert" not in html  # base.html carries its own tiny inline script
     assert "&lt;script&gt;" in html
 
 
@@ -237,10 +243,10 @@ def test_the_capability_token_never_leaks_into_rendered_html():
     assert TOKEN not in event_html
 
 
-def test_base_layout_has_the_topbar_brand_and_modal_dialog():
+def test_base_layout_has_the_sidebar_brand_and_modal_dialog():
     html = render_event(event_context())
 
-    assert 'class="topbar"' in html
+    assert '<aside class="side">' in html
     assert ">diffus.space<" in html
     assert '<dialog id="modal"' in html
     assert '<div class="page">' in html

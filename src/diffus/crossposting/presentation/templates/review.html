@@ -7,8 +7,6 @@
 <p class="meta kicker">Was noch nicht draußen ist</p>
 <h1 class="h1">Freigabe</h1>
 
-<p class="pills"><span class="pill current">Warteschlange</span><a class="pill" href="/freigabe/setup">Einrichtung</a></p>
-
 {% if error %}
 <div class="notice"><p class="body">{{ error }}</p></div>
 {% endif %}
@@ -35,7 +33,7 @@
       <div class="notice"><p class="body">{{ draft.error|error_text }}</p></div>
       {% endif %}
       {% set ig_hint = channels.instagram|instagram_hint %}
-      <form method="post" action="/freigabe/drafts/{{ draft.id }}/approve" class="stack">
+      <form method="post" action="/freigabe/drafts/{{ draft.id }}/approve" id="draft-approve-{{ draft.id }}" class="stack">
         <label>
           <input type="checkbox" name="instagram" value="true" {% if draft.targets and draft.targets.instagram %}checked{% endif %} {% if ig_hint %}disabled{% endif %}>
           Instagram
@@ -47,13 +45,12 @@
           {{ t.label }}
         </label>
         {% endfor %}
-        <div class="actions">
-          <button type="submit" class="btn btn-solid">Freigeben</button>
-        </div>
       </form>
-      <form method="post" action="/freigabe/drafts/{{ draft.id }}/reject">
-        <button type="submit" class="btn">Ablehnen</button>
-      </form>
+      <form method="post" action="/freigabe/drafts/{{ draft.id }}/reject" id="draft-reject-{{ draft.id }}"></form>
+      <div class="actions">
+        <button type="submit" form="draft-approve-{{ draft.id }}" class="btn btn-solid">Freigeben</button>
+        <button type="submit" form="draft-reject-{{ draft.id }}" class="btn">Ablehnen</button>
+      </div>
     </div>
   </article>
   {% endfor %}
@@ -90,20 +87,32 @@
         {% endfor %}
       </div>
       {% endif %}
-      <form method="post" action="/freigabe/posts/{{ post.id }}/approve" class="stack">
+      <form method="post" action="/freigabe/posts/{{ post.id }}/approve" id="post-approve-{{ post.id }}" class="stack">
         {% for d in pr.proposed %}
-        <label><input type="checkbox" name="telegram" value="{{ d.address }}" checked> {{ d.sink|sink_label }} {{ d.address }}</label>
+        {% set matched = channels.telegram|selectattr("destination", "equalto", d)|list %}
+        <label><input type="checkbox" name="telegram" value="{{ d.address }}" checked> {{ matched[0].label if matched else (d.sink|sink_label ~ " " ~ d.address) }}</label>
         {% endfor %}
-        <div class="actions">
-          <button type="submit" class="btn btn-solid">Freigeben</button>
-        </div>
       </form>
-      <form method="post" action="/freigabe/posts/{{ post.id }}/reject">
-        <button type="submit" class="btn">Ablehnen</button>
-      </form>
+      <form method="post" action="/freigabe/posts/{{ post.id }}/reject" id="post-reject-{{ post.id }}"></form>
+      <div class="actions">
+        <button type="submit" form="post-approve-{{ post.id }}" class="btn btn-solid">Freigeben</button>
+        <button type="submit" form="post-reject-{{ post.id }}" class="btn">Ablehnen</button>
+      </div>
     </div>
   </article>
   {% endfor %}
 </section>
 {% endif %}
+
+<section class="details">
+  <p class="eyebrow">Verlauf</p>
+  {% for e in history %}
+  <div class="log">
+    <p class="body">{% if e.post_id %}<a class="plain" href="/posts/{{ e.post_id }}" data-modal>{{ e.summary or "Ohne Text" }}</a>{% else %}{{ e.summary or "Ohne Text" }}{% endif %}</p>
+    <p class="meta">{{ e|outcome_line(multi_target) }} · {{ e.at|when(now) }}</p>
+  </div>
+  {% else %}
+  <p class="meta">Noch nichts entschieden.</p>
+  {% endfor %}
+</section>
 {% endblock %}

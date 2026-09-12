@@ -258,6 +258,16 @@ class PublishTargets:
     instagram: bool
     destinations: tuple[Destination, ...]
 
+    def as_destinations(self) -> tuple[Destination, ...]:
+        """Every destination this actually goes (or would go) to, Instagram included.
+
+        Used wherever a draft's targets need to become the flat destination
+        list a `ReviewLogEntry` records — the log doesn't distinguish
+        Instagram from any other channel, so `INSTAGRAM_CHANNEL` is folded in
+        the same way `all_auto` does.
+        """
+        return (*self.destinations, INSTAGRAM_CHANNEL) if self.instagram else self.destinations
+
 
 # The one Instagram "channel": a single-account app publishes to exactly one
 # place, so this fixed key stands in for both the channel_settings row (the
@@ -412,3 +422,61 @@ class Token:
     @property
     def can_publish(self) -> bool:
         return self.PUBLISH_SCOPE in self.scopes.split(",")
+
+
+class ReviewOutcome(StrEnum):
+    """What became of one draft/post reaching the Freigabe queue — append-only log entries."""
+
+    APPROVED = "approved"  # a human clicked Freigeben
+    REJECTED = "rejected"  # a human clicked Ablehnen (or approved nothing)
+    AUTO = "auto"  # went out on a channel's own auto-publish switch, no human involved
+
+
+def _summary_line(caption: str | None, limit: int) -> str:
+    """First non-empty line of `caption`, cut to `limit` chars — mirrors shared display.summary,
+    reimplemented here (stdlib only) rather than imported: domain never depends on presentation."""
+    if not caption:
+        return ""
+    line = next((ln.strip() for ln in caption.splitlines() if ln.strip()), "")
+    if len(line) <= limit:
+        return line
+    return line[: limit - 1].rstrip() + "…"
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewLogEntry:
+    """One append-only row of what happened to a draft or a polled post's deliveries.
+
+    The Freigabe queue only shows what is still open; this is the "what
+    happened" record the owner asked to see on that same page ("Verlauf").
+    """
+
+    id: str
+    at: datetime
+    kind: str  # "draft" | "post"
+    outcome: ReviewOutcome
+    summary: str  # first non-empty caption line, <= SUMMARY_LIMIT chars, "" when none
+    targets: tuple[Destination, ...]  # what it went (or would have gone) to; () for rejected
+    post_id: str | None = None  # the resulting/affected post, None for a rejected draft
+
+    SUMMARY_LIMIT: ClassVar[int] = 90
+
+    @classmethod
+    def new(
+        cls,
+        kind: str,
+        outcome: ReviewOutcome,
+        caption: str | None,
+        targets: Sequence[Destination],
+        now: datetime,
+        post_id: str | None = None,
+    ) -> ReviewLogEntry:
+        return cls(
+            id=uuid.uuid4().hex,
+            at=now,
+            kind=kind,
+            outcome=outcome,
+            summary=_summary_line(caption, cls.SUMMARY_LIMIT),
+            targets=tuple(targets),
+            post_id=post_id,
+        )

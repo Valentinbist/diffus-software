@@ -21,9 +21,10 @@ wired today; the model no longer assumes it.
 | Queue/broker | None | Postgres is enough at this scale |
 | Media | Download to tempfile → hand `MediaFile(item, path)` to the sink → delete | IG CDN URLs are short-lived; a file path is the one payload every sink can use |
 | Routing | `TELEGRAM_CHAT_IDS` env var → `Destination("telegram", chat_id)` list built in the composition root | Edited twice a year, no CRUD needed |
-| UI | Jinja served by FastAPI, German, matching the diffus.space design system, plus a Vite/TypeScript/htmx build (`web/`) for progressive-enhancement client code; on a ≥ 900 px viewport, detail pages (a post, an event, a wizard) open as a `<dialog>` modal instead of a full navigation | Every URL still works as a full page (phones, no-JS, crawlers); the modal is additive, not a second UI |
+| UI | Jinja served by FastAPI, German, matching the diffus.space design system, plus a Vite/TypeScript/htmx build (`web/`) for progressive-enhancement client code; on a ≥ 900 px viewport, detail pages (a post, an event, a wizard) open as a `<dialog>` modal instead of a full navigation; the shell (`base.html`) is a left sidebar at ≥ 900 px and, below that, a one-row top bar plus a bottom tab bar, so the nav never wraps or clips (round 6) | Every URL still works as a full page (phones, no-JS, crawlers); the modal is additive, not a second UI |
 | Auth | `HTTPBasic` + `secrets.compare_digest`, creds from env | Needs TLS in front (Caddy) — required anyway for the OAuth redirect URI |
-| Wizard entry (round 4) | **One** three-step flow — Termin → Post → Vorschau — at `/neu` → `/posts/new` → its preview, each of the first two steps skippable, behind one entry point ("+ Neu") everywhere; the event step writes through `EventDirectory.create_event` rather than the calendar owning its own form | Replaces two separate flows ("Termin anlegen" / "Post erstellen") that did the same two things in a different order; owner: "one wizard, one modal" |
+| Wizard entry (round 4, entry point simplified round 5) | **One** three-step flow — Termin → Post → Vorschau — at `/neu` → `/posts/new` → its preview, each of the first two steps skippable, behind one entry point everywhere: the shell's own cta button (sidebar on desktop, top bar on phones) ("Neues Event erstellen" / "Neuer Post"), replacing round 4's own "+ Neu" nav link and every in-page "Neu" button; the event step writes through `EventDirectory.create_event` rather than the calendar owning its own form | Replaces two separate flows ("Termin anlegen" / "Post erstellen") that did the same two things in a different order; owner: "one wizard, one modal", then round 5: "the neu button should be in the header" |
+| Freigabe history | append-only `review_log`, one row per human decision or auto-publish | the queue only shows what is still open; the owner wants to see what happened |
 
 ## Domain model
 
@@ -145,10 +146,10 @@ that already failed once and is being retried — a `FAILED` row was already
 approved (or auto-sent) the first time, so a retry always attempts delivery
 regardless of the switch. `Delivery.can_retry()` is unaffected by any of
 this; a `REVIEW` row is never `FAILED`, so the poller's own retry loop never
-touches it — only a human (via `/freigabe`, with the header's live count
+touches it — only a human (via `/freigabe`, with the nav's live count
 badge from `GET /freigabe/count`) or a switch flip moves it on.
 
-## Schema (4 tables, + 2 more in migration `0005`, + 1 more and 2 columns in `0006`)
+## Schema (4 tables, + 2 more in migration `0005`, + 1 more and 2 columns in `0006`, + 1 more in `0007`)
 
 ```sql
 tokens      (source PK, access_token, external_user_id, expires_at, refreshed_at, scopes)
@@ -200,6 +201,22 @@ empty, so every channel queues until someone explicitly switches it on.
 Migration `0006` also adds `ix_deliveries_status`, an index the Freigabe
 page's `in_review()` queries lean on.
 
+### Review log (migration `0007`)
+
+```sql
+review_log  (id PK, at, kind, outcome, post_id, summary, targets JSONB)
+```
+
+Append-only, one row per human Freigabe decision (`ApprovePostDeliveries`,
+`RejectPostDeliveries`, `ApproveDraft`, `RejectDraft`) or auto-publish
+(`SubmitDraft`'s all-auto path, `SyncPosts`'s per-post auto deliveries) — see
+`ReviewLogEntry` and "Freigabe (approval queue)" below. `post_id` carries no
+foreign key, the same reasoning as `post_drafts.post_id`: a rejected draft
+never becomes a post. `targets` is a JSONB list of `Destination` text forms,
+`[]` for a rejected draft (nothing was ever going to go anywhere).
+`ix_review_log_at` is what `/freigabe`'s "Verlauf" section (`recent(limit=30)`,
+newest first) queries against.
+
 ### Calendar schema (4 more tables, migration `0004`)
 
 ```sql
@@ -234,33 +251,43 @@ src/diffus/
   shared/                        # what every bounded context uses; contexts never import each other
     config.py                    # pydantic-settings, env-only; read by the composition root and alembic
     dates.py                     # MONTHS/WEEKDAYS — the one shared/ module calendar/application may import
+    automation.py                # JobRun/JobStatus/Automation/RUN_HISTORY — context-neutral shape of
+                                  #   "what runs on a timer", for /einstellungen; a value-only module,
+                                  #   so application layers may import it the same way they import dates.py
     db/base.py                   # `Base(DeclarativeBase)`; every context's models inherit from it
     db/session.py                # engine / session factory construction
-    scheduler.py                 # start_scheduler(): one AsyncIOScheduler interval job
+    scheduler.py                 # start_scheduler(): one AsyncIOScheduler interval job; next_run_time()
+                                  #   reads the interval job's own next fire time, for /einstellungen
     presentation/
       auth.py                    # HTTP Basic auth dependency, applied to every route
       display.py                 # German date/time/text formatting; re-exports shared/dates.py
       templates.py                # build_templates(): Jinja2Templates + shared filters + assets global
       assets.py                  # load_assets(): resolves web/'s build manifest into asset() URLs
-      templates/base.html         # topbar, <dialog id="modal">, asset() links
+      templates/base.html         # the shell (sidebar / top bar + bottom tabs), <dialog id="modal">, asset() links
       static/dist/                # npm run build's output (gitignored); FastAPI serves it at /static
   crossposting/                  # first bounded context — poll a source, fan out, show what happened
     domain/                      # entities, value objects, ports, errors — stdlib only
     application/                 # use cases; depend only on domain
-      sync_posts.py               #   poll → upsert + previews → claim/queue_for_review → DeliverPost
+      sync_posts.py               #   poll → upsert + previews → claim/queue_for_review → DeliverPost;
+                                   #   also logs one AUTO review_log entry per post (round 5)
       deliver.py                  #   DeliverPost: sink registry lookup, deliver, record, commit
-      sync_job.py                 #   SyncJob: refresh token, then sync, under one lock; LastRun for the UI
+      sync_job.py                 #   SyncJob: refresh token, then sync, under one lock; LastRun (+ a short
+                                   #   `runs` history, round 5) for the UI
       resend_delivery.py, refresh_token.py, connect_instagram.py
       overview.py, post_detail.py, preview.py     # read side
-      drafts.py                   #   CreateDraft, SubmitDraft, ApproveDraft, GetDraft, DiscardDraft, GetDraftImage
+      drafts.py                   #   CreateDraft, SubmitDraft, ApproveDraft, RejectDraft, GetDraft,
+                                   #   DiscardDraft, GetDraftImage — Approve/RejectDraft both log to
+                                   #   review_log (round 5), DiscardDraft stays the wizard's own "Verwerfen"
       publish_draft.py            #   PublishDraft: publishes a draft — the wizard's immediate path and
                                    #   ApproveDraft's Freigabe path both end here (see Sharp edges)
       channels.py                 #   GetChannels, SetAutoPublish, all_auto() — the Freigabe on/off switches
-      review.py                   #   GetReviewQueue, CountReview, ApprovePostDeliveries, RejectPostDeliveries
-                                   #   — the Freigabe page's read and approve/reject side
+      review.py                   #   GetReviewQueue, CountReview, GetReviewHistory, ApprovePostDeliveries,
+                                   #   RejectPostDeliveries — the Freigabe page's read, approve/reject and
+                                   #   Verlauf (round 5) side
       draft_media.py               #   DraftMediaGateway: a draft's own bytes as a MediaGateway for Telegram
     infrastructure/
-      db/                         # models (Base from shared), repositories (session-bound), uow.py
+      db/                         # models (Base from shared, incl. ReviewLogRow), repositories (session-bound,
+                                   #   incl. SqlReviewLogRepository), uow.py
       instagram/                  # Graph client: PostSource + AuthGateway + MediaPublisher, source = "instagram"
       telegram/                   # render (HTML captions) + sink (PostSink)
       media/
@@ -271,13 +298,17 @@ src/diffus/
       calendar.py                  #   CalendarEventDirectory: EventDirectory over the calendar's read use
                                     #   cases and, for `.link()`, its LinkEventPost command
     presentation/
-      services.py                 # typed Services dataclass handed to routes via Depends
+      services.py                 # typed Services dataclass handed to routes via Depends; carries
+                                   #   `automation: Automation` (round 5) alongside every use case
       routes.py, display.py                         # context-specific filters + routes; the whole
                                                       #   3-step wizard lives here now (GET/POST /neu,
                                                       #   /posts/new, /posts/new/{draft}), plus Freigabe
-                                                      #   and its setup.html (round 4: "Einrichtung")
-      templates/                                     # index.html, post.html, review.html, setup.html,
-                                                      #   compose.html, compose_preview.html,
+                                                      #   and GET /einstellungen (round 5, replaces
+                                                      #   /freigabe/setup — job_status()/sync_summary()/
+                                                      #   outcome_line() live in display.py)
+      templates/                                     # index.html, post.html, review.html (+ its Verlauf
+                                                      #   section, round 5), settings.html (round 5, replaces
+                                                      #   setup.html), compose.html, compose_preview.html,
                                                       #   wizard_event.html (the wizard's Termin step),
                                                       #   _steps.html (the wizard's step indicator partial,
                                                       #   included by all three wizard pages)
@@ -287,7 +318,8 @@ src/diffus/
                                   #   ComposeHint), ports (CalendarGateway, PostCatalog, repositories,
                                   #   UnitOfWork), errors
     application/
-      sync_calendar.py, sync_job.py                # SyncCalendar + CalendarSyncJob, mirrors crossposting's
+      sync_calendar.py, sync_job.py                # SyncCalendar + CalendarSyncJob (+ a short `runs`
+                                                      #   history, round 5), mirrors crossposting's
       calendar_events.py, event_detail.py           # read side: agenda/month query, one event's detail
       link_event_post.py, link_picker.py            # link/unlink a post to an event, and the reverse picker
       linked_events.py                              # GetLinkedEvents: crossposting's EventDirectory reads this
@@ -312,11 +344,15 @@ src/diffus/
                                                       #   redirect to crossposting's /neu (round 4) — no
                                                       #   POST route or event form lives in this context
                                                       #   any more; CalendarServices.create_event stays
-                                                      #   (CalendarEventDirectory is the one caller left)
+                                                      #   (CalendarEventDirectory is the one caller left);
+                                                      #   display.py's job_status()/calendar_sync_summary()
+                                                      #   feed crossposting's /einstellungen (round 5) —
+                                                      #   the one place this context's presentation is read
+                                                      #   from outside it, via the composition root only
       templates/                   # calendar.html, event.html, link.html — the event form moved to
                                     #   crossposting/presentation/templates/wizard_event.html (round 4)
 alembic/                          # 0001 initial, 0002 previews, 0003 destinations and sources, 0004 calendar,
-                                   #   0005 drafts and scopes, 0006 Freigabe and channels
+                                   #   0005 drafts and scopes, 0006 Freigabe and channels, 0007 review log
 ```
 
 ## Conventions

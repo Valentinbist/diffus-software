@@ -21,6 +21,7 @@ __all__ = [
     "format_day",
     "format_when",
     "format_ago",
+    "format_until",
     "summary",
     "redact",
     "error_text",
@@ -59,6 +60,26 @@ def format_ago(dt: datetime, now: datetime) -> str:
         return "vor 1 Stunde" if hours == 1 else f"vor {hours} Stunden"
     days = hours // 24
     return "vor 1 Tag" if days == 1 else f"vor {days} Tagen"
+
+
+def format_until(dt: datetime, now: datetime) -> str:
+    """'gleich', 'in 1 Minute', 'in 4 Minuten', 'in 2 Stunden', 'in 3 Tagen' — format_ago's mirror.
+
+    Used for a scheduled future time (the settings page's "Nächster Lauf"),
+    never a past one — a negative delta (dt already passed) still reads as
+    "gleich" rather than a nonsensical negative count.
+    """
+    seconds = max((dt - now).total_seconds(), 0)
+    if seconds < 60:
+        return "gleich"
+    minutes = int(seconds // 60)
+    if minutes < 60:
+        return "in 1 Minute" if minutes == 1 else f"in {minutes} Minuten"
+    hours = minutes // 60
+    if hours < 24:
+        return "in 1 Stunde" if hours == 1 else f"in {hours} Stunden"
+    days = hours // 24
+    return "in 1 Tag" if days == 1 else f"in {days} Tagen"
 
 
 def summary(text: str | None, limit: int = 90) -> str:

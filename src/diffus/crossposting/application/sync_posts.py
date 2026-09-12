@@ -12,9 +12,17 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from diffus.crossposting.application.deliver import DeliverPost
-from diffus.crossposting.domain.entities import DeliveryStatus, Destination, Post, Preview
+from diffus.crossposting.domain.entities import (
+    DeliveryStatus,
+    Destination,
+    Post,
+    Preview,
+    ReviewLogEntry,
+    ReviewOutcome,
+)
 from diffus.crossposting.domain.errors import NotConnectedError
 from diffus.crossposting.domain.ports import MediaGateway, PostSource, UnitOfWorkFactory
 
@@ -73,6 +81,10 @@ class SyncPosts:
                 await uow.commit()
             report.previews += len(downloaded)
 
+            # Destinations this post went to automatically (no human involved) —
+            # logged once, after the loop, as one AUTO review_log entry per post.
+            auto_targets: list[Destination] = []
+
             for destination in self.destinations:
                 async with self.uow() as uow:
                     delivery = await uow.deliveries.claim(post.id, destination)
@@ -100,11 +112,30 @@ class SyncPosts:
                     report.queued += 1
                     continue
 
+                # A fresh claim reaching here means the switch was on — the
+                # "not auto" fresh case above already queued and continued.
+                fresh_auto = delivery.status == DeliveryStatus.PENDING
                 status = await self.deliver.run(post, delivery)
                 if status == DeliveryStatus.SENT:
                     report.sent += 1
                 else:
                     report.failed += 1
+                if fresh_auto:
+                    auto_targets.append(destination)
+
+            if auto_targets and not mark_seen_only:
+                async with self.uow() as uow:
+                    await uow.review_log.add(
+                        ReviewLogEntry.new(
+                            "post",
+                            ReviewOutcome.AUTO,
+                            post.caption,
+                            tuple(auto_targets),
+                            datetime.now(UTC),
+                            post.id,
+                        )
+                    )
+                    await uow.commit()
 
         return report
 

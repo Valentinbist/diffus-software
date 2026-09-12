@@ -16,11 +16,19 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from diffus.crossposting.application.deliver import DeliverPost
 from diffus.crossposting.application.overview import PostView
 from diffus.crossposting.application.post_detail import GetPostDetail
-from diffus.crossposting.domain.entities import ComposeHint, DeliveryStatus, Destination, PostDraft
+from diffus.crossposting.domain.entities import (
+    ComposeHint,
+    DeliveryStatus,
+    Destination,
+    PostDraft,
+    ReviewLogEntry,
+    ReviewOutcome,
+)
 from diffus.crossposting.domain.errors import ConnectorError
 from diffus.crossposting.domain.ports import EventDirectory, UnitOfWorkFactory
 
@@ -122,6 +130,20 @@ class ApprovePostDeliveries:
                     else:
                         row.reject()
                     await uow.deliveries.save(row)
+                if rows:
+                    # Only a real click logs anything — a second "Freigeben" on an
+                    # already-emptied queue (nothing left in REVIEW) is a no-op.
+                    outcome = ReviewOutcome.APPROVED if to_send else ReviewOutcome.REJECTED
+                    await uow.review_log.add(
+                        ReviewLogEntry.new(
+                            "post",
+                            outcome,
+                            post.caption,
+                            tuple(row.destination for row in to_send),
+                            datetime.now(UTC),
+                            post.id,
+                        )
+                    )
                 await uow.commit()
 
             # Delivering is a network call: it happens after the unit of work
@@ -136,7 +158,27 @@ class RejectPostDeliveries:
     async def run(self, post_id: str) -> None:
         async with self.uow() as uow:
             in_review = await uow.deliveries.in_review()
-            for row in in_review.get(post_id, []):
+            rows = in_review.get(post_id, [])
+            for row in rows:
                 row.reject()
                 await uow.deliveries.save(row)
+            if rows:
+                post = await uow.posts.get(post_id)
+                caption = post.caption if post is not None else None
+                await uow.review_log.add(
+                    ReviewLogEntry.new(
+                        "post", ReviewOutcome.REJECTED, caption, (), datetime.now(UTC), post_id
+                    )
+                )
             await uow.commit()
+
+
+@dataclass
+class GetReviewHistory:
+    """The Freigabe page's "Verlauf" section: every past decision/auto-publish, newest first."""
+
+    uow: UnitOfWorkFactory
+
+    async def run(self, limit: int = 30) -> list[ReviewLogEntry]:
+        async with self.uow() as uow:
+            return await uow.review_log.recent(limit)

@@ -31,6 +31,7 @@ from diffus.crossposting.application.drafts import (
     DiscardDraft,
     GetDraft,
     GetDraftImage,
+    RejectDraft,
     SubmitDraft,
 )
 from diffus.crossposting.application.overview import GetOverview, NoEvents
@@ -42,6 +43,7 @@ from diffus.crossposting.application.resend_delivery import ResendDelivery
 from diffus.crossposting.application.review import (
     ApprovePostDeliveries,
     CountReview,
+    GetReviewHistory,
     GetReviewQueue,
     RejectPostDeliveries,
 )
@@ -67,8 +69,10 @@ from diffus.crossposting.domain.entities import (
 )
 from diffus.crossposting.domain.errors import EventCreationError
 from diffus.crossposting.domain.ports import EventDirectory
+from diffus.crossposting.presentation.display import job_status
 from diffus.crossposting.presentation.routes import build_templates
 from diffus.crossposting.presentation.services import Services
+from diffus.shared.automation import Automation
 from diffus.shared.config import get_settings
 from tests.calendar.fakes import FakeCalendar, FakeCalendarUnitOfWork, FakeEvents, FakePostCatalog
 from tests.crossposting.fakes import (
@@ -200,16 +204,21 @@ def make_services(
         ),
         set_auto_publish=SetAutoPublish(uow=uow, channels=[INSTAGRAM_CHANNEL, *destinations]),
         submit_draft=SubmitDraft(uow=uow, publish=publish_draft, destinations=destinations),
-        approve_draft=ApproveDraft(publish=publish_draft),
+        approve_draft=ApproveDraft(publish=publish_draft, uow=uow),
         review_queue=GetReviewQueue(
             uow=uow, detail=detail, events=events, destinations=destinations
         ),
         review_count=CountReview(uow=uow),
+        review_history=GetReviewHistory(uow=uow),
         approve_post=ApprovePostDeliveries(
             uow=uow, deliver=deliver, destinations=destinations, lock=job.lock
         ),
         reject_post=RejectPostDeliveries(uow=uow),
+        reject_draft=RejectDraft(uow=uow),
         events=events,
+        automation=Automation(
+            interval_minutes=5, jobs=lambda: [job_status(job)], next_run=lambda: None
+        ),
     )
 
 
@@ -303,6 +312,24 @@ async def test_calendar_pages_and_linking_work_on_fakes(settings_env):
 
         resp = await client.post("/calendar/sync")
         assert resp.status_code == 303
+        assert resp.headers["location"] == "/calendar"
+
+
+async def test_calendar_sync_bounces_back_to_next_but_never_off_site(settings_env):
+    uow, catalog = make_calendar_uow()
+    calendar_services = make_calendar_services(uow, catalog)
+    services = make_services(await make_uow(), FakeSink(), FakeMedia())
+    app = create_app(services=services, calendar=calendar_services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.post("/calendar/sync", data={"next": "/einstellungen"})
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/einstellungen"
+
+        resp = await client.post("/calendar/sync", data={"next": "//evil.example.com"})
+        assert resp.headers["location"] == "/calendar"
 
 
 async def test_calendar_status_filter_hides_a_linked_event_and_the_pager_carries_it(settings_env):
@@ -678,7 +705,7 @@ async def test_set_channels_with_a_malformed_destination_is_rejected(settings_en
     assert resp.status_code == 400
 
 
-async def test_set_channels_redirects_to_the_setup_page(settings_env):
+async def test_set_channels_redirects_to_einstellungen(settings_env):
     services = make_services(await make_uow(), FakeSink(), FakeMedia())
     app = create_app(services=services)
 
@@ -688,20 +715,34 @@ async def test_set_channels_redirects_to_the_setup_page(settings_env):
         resp = await client.post("/channels", data={"auto": "telegram:c1"})
 
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/freigabe/setup"
+    assert resp.headers["location"] == "/einstellungen"
 
 
-async def test_setup_page_shows_the_kanaele_switches(settings_env):
+async def test_settings_page_shows_the_kanaele_switches(settings_env):
     services = make_services(await make_uow(), FakeSink(), FakeMedia())
     app = create_app(services=services)
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
     ) as client:
-        resp = await client.get("/freigabe/setup")
+        resp = await client.get("/einstellungen")
 
     assert resp.status_code == 200
-    assert "Kanäle" in resp.text
+    assert "Einstellungen" in resp.text
+    assert "Automatisch veröffentlichen" in resp.text
+
+
+async def test_freigabe_setup_redirects_to_einstellungen(settings_env):
+    services = make_services(await make_uow(), FakeSink(), FakeMedia())
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.get("/freigabe/setup", follow_redirects=False)
+
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/einstellungen"
 
 
 async def test_sync_now_bounces_back_to_next_but_never_off_site(settings_env):
@@ -711,9 +752,9 @@ async def test_sync_now_bounces_back_to_next_but_never_off_site(settings_env):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
     ) as client:
-        resp = await client.post("/sync", data={"next": "/freigabe/setup"})
+        resp = await client.post("/sync", data={"next": "/einstellungen"})
         assert resp.status_code == 303
-        assert resp.headers["location"] == "/freigabe/setup"
+        assert resp.headers["location"] == "/einstellungen"
 
         resp = await client.post("/sync", data={"next": "//evil.example.com"})
         assert resp.headers["location"] == "/"
@@ -800,7 +841,9 @@ async def test_rejecting_a_draft_removes_it_from_freigabe(settings_env):
         assert resp.status_code == 303
 
         resp = await client.get("/freigabe")
-        assert "Wird abgelehnt" not in resp.text
+        # Gone from the queue...
+        assert f'action="/freigabe/drafts/{draft_id}/approve"' not in resp.text
+        assert "Abgelehnt" in resp.text  # ...but shows up in the Verlauf history now
 
 
 # -- round 4: the unified wizard (Termin -> Post -> Vorschau) ------------------------

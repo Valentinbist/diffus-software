@@ -21,6 +21,7 @@ from diffus.crossposting.application.drafts import (
     DiscardDraft,
     GetDraft,
     GetDraftImage,
+    RejectDraft,
     SubmitDraft,
 )
 from diffus.crossposting.application.overview import GetOverview
@@ -31,12 +32,14 @@ from diffus.crossposting.application.resend_delivery import ResendDelivery
 from diffus.crossposting.application.review import (
     ApprovePostDeliveries,
     CountReview,
+    GetReviewHistory,
     GetReviewQueue,
     RejectPostDeliveries,
 )
 from diffus.crossposting.application.sync_job import SyncJob
 from diffus.crossposting.domain.entities import Destination
 from diffus.crossposting.domain.ports import EventDirectory
+from diffus.shared.automation import Automation
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,9 +63,12 @@ class Services:
     approve_draft: ApproveDraft
     review_queue: GetReviewQueue
     review_count: CountReview
+    review_history: GetReviewHistory
     approve_post: ApprovePostDeliveries
     reject_post: RejectPostDeliveries
+    reject_draft: RejectDraft
     events: EventDirectory
+    automation: Automation
 
 
 def get_services(request: Request) -> Services:

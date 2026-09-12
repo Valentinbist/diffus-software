@@ -29,6 +29,8 @@ from diffus.crossposting.domain.entities import (
     Post,
     PostDraft,
     PublishTargets,
+    ReviewLogEntry,
+    ReviewOutcome,
 )
 from diffus.crossposting.infrastructure.db.uow import SqlUnitOfWork
 from diffus.shared.db.session import make_engine, make_session_factory
@@ -41,7 +43,10 @@ pytestmark = pytest.mark.skipif(
 
 # Crossposting's own tables only — calendar tables are a separate context's
 # schema and are never touched here (see docs/architecture.md, rule 3).
-TABLES = "deliveries, previews, posts, post_draft_media, post_drafts, channel_settings, tokens"
+TABLES = (
+    "deliveries, previews, posts, post_draft_media, post_drafts, "
+    "channel_settings, review_log, tokens"
+)
 
 
 @pytest.fixture
@@ -247,3 +252,36 @@ async def test_set_upserts_rather_than_duplicating(factory):
         settings = await uow.channels.get_all()
 
     assert settings == {telegram: False, instagram: False}
+
+
+# -- SqlReviewLogRepository ---------------------------------------------------
+
+
+async def test_review_log_add_and_recent_round_trip_newest_first(factory):
+    telegram = Destination("telegram", "c1")
+    older = ReviewLogEntry.new(
+        "post",
+        ReviewOutcome.AUTO,
+        "Älterer Post",
+        (telegram,),
+        datetime(2026, 1, 1, tzinfo=UTC),
+        post_id="p1",
+    )
+    newer = ReviewLogEntry.new(
+        "draft", ReviewOutcome.REJECTED, "Neuerer Entwurf", (), datetime(2026, 1, 2, tzinfo=UTC)
+    )
+
+    async with factory() as uow:
+        await uow.review_log.add(older)
+        await uow.review_log.add(newer)
+        await uow.commit()
+
+    async with factory() as uow:
+        recent = await uow.review_log.recent()
+
+    assert [e.id for e in recent] == [newer.id, older.id]
+    assert recent[1].targets == (telegram,)
+    assert recent[1].post_id == "p1"
+    assert recent[0].targets == ()
+    assert recent[0].post_id is None
+    assert recent[0].outcome == ReviewOutcome.REJECTED

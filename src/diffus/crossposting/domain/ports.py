@@ -27,6 +27,7 @@ from diffus.crossposting.domain.entities import (
     Post,
     PostDraft,
     Preview,
+    ReviewLogEntry,
     Token,
 )
 
@@ -177,6 +178,16 @@ class ChannelSettingsRepository(Protocol):
     async def set(self, destination: Destination, auto_publish: bool) -> None: ...
 
 
+class ReviewLogRepository(Protocol):
+    """Append-only history of Freigabe decisions and auto-publishes — the /freigabe "Verlauf"."""
+
+    async def add(self, entry: ReviewLogEntry) -> None: ...
+
+    async def recent(self, limit: int = 30) -> list[ReviewLogEntry]:
+        """Newest first."""
+        ...
+
+
 class MediaPublisher(Protocol):
     """Publishes a draft's images to a source and reads the resulting post back."""
 
@@ -196,6 +207,7 @@ class UnitOfWork(Protocol):
     tokens: TokenRepository
     drafts: DraftRepository
     channels: ChannelSettingsRepository
+    review_log: ReviewLogRepository
 
     async def __aenter__(self) -> Self: ...
 

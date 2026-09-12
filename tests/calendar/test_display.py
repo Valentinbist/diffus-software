@@ -7,12 +7,16 @@ from zoneinfo import ZoneInfo
 
 from diffus.calendar.application.calendar_events import EventPostStatus, EventView
 from diffus.calendar.application.suggest_posts import SuggestionReason
-from diffus.calendar.domain.entities import CalendarEvent
+from diffus.calendar.application.sync_calendar import CalendarSyncReport, SyncCalendar
+from diffus.calendar.application.sync_job import CalendarLastRun, CalendarSyncJob
+from diffus.calendar.domain.entities import CalendarEvent, CalendarSnapshot
 from diffus.calendar.presentation.display import (
     by_day,
+    calendar_sync_summary,
     filter_by_status,
     format_agenda_day,
     format_event_time,
+    job_status,
     month_grid,
     month_label,
     month_range,
@@ -21,6 +25,7 @@ from diffus.calendar.presentation.display import (
     post_status_label,
     reason_label,
 )
+from tests.calendar.fakes import FakeCalendar, FakeCalendarUnitOfWork
 
 TZ = ZoneInfo("Europe/Berlin")
 NOW = datetime(2026, 9, 3, 10, 0, tzinfo=UTC)  # Donnerstag, 3. September in Berlin
@@ -228,3 +233,63 @@ def test_reason_label_text():
     assert reason_label(SuggestionReason.DATE) == "Datum steht im Text"
     assert reason_label(SuggestionReason.TITLE) == "Titel passt"
     assert reason_label(SuggestionReason.RECENT) == "Kurz vor dem Termin gepostet"
+
+
+# -- calendar_sync_summary / job_status ------------------------------------------
+
+
+def test_calendar_sync_summary_with_no_report_is_empty():
+    assert calendar_sync_summary(None) == ""
+
+
+def test_calendar_sync_summary_nothing_fetched():
+    assert calendar_sync_summary(CalendarSyncReport(fetched=0)) == "Nichts Neues"
+
+
+def test_calendar_sync_summary_fetched_only():
+    assert calendar_sync_summary(CalendarSyncReport(fetched=12)) == "12 Termine"
+
+
+def test_calendar_sync_summary_fetched_and_removed():
+    assert (
+        calendar_sync_summary(CalendarSyncReport(fetched=12, removed=2)) == "12 Termine, 2 entfernt"
+    )
+
+
+def make_calendar_job() -> CalendarSyncJob:
+    calendar = FakeCalendar(CalendarSnapshot((), ()))
+    sync = SyncCalendar(calendar=calendar, uow=FakeCalendarUnitOfWork())
+    return CalendarSyncJob(sync)
+
+
+def test_calendar_job_status_has_the_calendar_label_and_sync_action():
+    status = job_status(make_calendar_job())
+
+    assert status.key == "calendar"
+    assert status.label == "Kalender-Abgleich"
+    assert status.sync_action == "/calendar/sync"
+    assert status.last is None
+
+
+def test_calendar_job_status_runs_are_newest_first_and_summarised():
+    job = make_calendar_job()
+    older = CalendarLastRun(at=NOW - timedelta(hours=1), report=CalendarSyncReport(fetched=3))
+    newer = CalendarLastRun(at=NOW, report=CalendarSyncReport(fetched=5, removed=1))
+    job.runs.append(older)
+    job.runs.append(newer)
+
+    status = job_status(job)
+
+    assert [run.at for run in status.runs] == [NOW, NOW - timedelta(hours=1)]
+    assert status.last is not None
+    assert status.last.summary == "5 Termine, 1 entfernt"
+
+
+def test_calendar_job_status_carries_the_error_through_unchanged():
+    job = make_calendar_job()
+    job.runs.append(CalendarLastRun(at=NOW, error="kalender.digital is down"))
+
+    status = job_status(job)
+
+    assert status.last is not None
+    assert status.last.error == "kalender.digital is down"

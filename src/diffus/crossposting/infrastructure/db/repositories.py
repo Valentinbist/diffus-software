@@ -28,6 +28,8 @@ from diffus.crossposting.domain.entities import (
     PostDraft,
     Preview,
     PublishTargets,
+    ReviewLogEntry,
+    ReviewOutcome,
     Token,
 )
 from diffus.crossposting.infrastructure.db.models import (
@@ -37,6 +39,7 @@ from diffus.crossposting.infrastructure.db.models import (
     PostDraftRow,
     PostRow,
     PreviewRow,
+    ReviewLogRow,
     TokenRow,
 )
 
@@ -424,3 +427,39 @@ class SqlChannelSettingsRepository:
             set_={"auto_publish": stmt.excluded.auto_publish},
         )
         await self._s.execute(stmt)
+
+
+def _row_to_review_log_entry(row: ReviewLogRow) -> ReviewLogEntry:
+    return ReviewLogEntry(
+        id=row.id,
+        at=row.at,
+        kind=row.kind,
+        outcome=ReviewOutcome(row.outcome),
+        summary=row.summary,
+        targets=tuple(Destination.parse(t) for t in row.targets),
+        post_id=row.post_id,
+    )
+
+
+class SqlReviewLogRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def add(self, entry: ReviewLogEntry) -> None:
+        self._s.add(
+            ReviewLogRow(
+                id=entry.id,
+                at=entry.at,
+                kind=entry.kind,
+                outcome=entry.outcome.value,
+                post_id=entry.post_id,
+                summary=entry.summary,
+                targets=[str(d) for d in entry.targets],
+            )
+        )
+
+    async def recent(self, limit: int = 30) -> list[ReviewLogEntry]:
+        result = await self._s.execute(
+            select(ReviewLogRow).order_by(ReviewLogRow.at.desc()).limit(limit)
+        )
+        return [_row_to_review_log_entry(row) for row in result.scalars().all()]

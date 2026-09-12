@@ -14,7 +14,10 @@ from zoneinfo import ZoneInfo
 
 from diffus.calendar.application.calendar_events import EventPostStatus, EventView
 from diffus.calendar.application.suggest_posts import SuggestionReason
+from diffus.calendar.application.sync_calendar import CalendarSyncReport
+from diffus.calendar.application.sync_job import CalendarSyncJob
 from diffus.calendar.domain.entities import CalendarEvent
+from diffus.shared.automation import JobRun, JobStatus
 from diffus.shared.presentation.display import MONTHS, WEEKDAYS
 
 
@@ -166,6 +169,29 @@ def post_status_label(status: EventPostStatus) -> str:
         EventPostStatus.LINKED: "Post verknüpft",
         EventPostStatus.DELIVERED: "Post verknüpft · zugestellt ✓",
     }[status]
+
+
+def calendar_sync_summary(report: CalendarSyncReport | None) -> str:
+    """'12 Termine' / '12 Termine, 2 entfernt' / 'Nichts Neues' — the calendar sync's summary."""
+    if report is None:
+        return ""
+    if report.fetched == 0:
+        return "Nichts Neues"
+    text = f"{report.fetched} Termine"
+    if report.removed:
+        text += f", {report.removed} entfernt"
+    return text
+
+
+def job_status(job: CalendarSyncJob) -> JobStatus:
+    """The calendar sync job, context-neutral, for the /einstellungen automation section."""
+    runs = tuple(
+        JobRun(at=run.at, error=run.error, summary=calendar_sync_summary(run.report))
+        for run in reversed(job.runs)
+    )
+    return JobStatus(
+        key="calendar", label="Kalender-Abgleich", runs=runs, sync_action="/calendar/sync"
+    )
 
 
 def reason_label(reason: SuggestionReason) -> str:

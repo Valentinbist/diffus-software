@@ -69,4 +69,12 @@ function setupModal(): void {
   window.addEventListener("popstate", () => location.reload());
 }
 
+// Filter forms submit themselves on change; their "Anwenden" button is only
+// for the no-JS case (base.html marks <html class="js"> so CSS can hide it).
+for (const field of document.querySelectorAll<HTMLSelectElement | HTMLInputElement>(
+  "form[data-autosubmit] select, form[data-autosubmit] input[type=checkbox]",
+)) {
+  field.addEventListener("change", () => field.form?.requestSubmit());
+}
+
 setupModal();

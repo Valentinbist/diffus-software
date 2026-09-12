@@ -71,6 +71,7 @@ def build_templates(tz: ZoneInfo, calendar_enabled: bool = False) -> Jinja2Templ
     templates.env.filters["source_label"] = display.source_label
     templates.env.filters["instagram_hint"] = display.instagram_hint
     templates.env.filters["channel_lines"] = display.channel_lines
+    templates.env.filters["outcome_line"] = display.outcome_line
     return templates
 
 
@@ -93,9 +94,9 @@ async def index(request: Request, services: ServicesDep, events: str = "all", so
             "last_run": services.sync_job.last_run,
             "multi_target": len(services.destinations) > 1,
             "events": events,
-            "event_pills": display.EVENT_PILLS,
+            "event_options": display.EVENT_OPTIONS,
             "source": source,
-            "source_pills": display.SOURCE_PILLS,
+            "source_options": display.SOURCE_OPTIONS,
             "review_count": review_count,
         },
     )
@@ -111,8 +112,8 @@ async def set_channels(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="bad destination") from exc
     await services.set_auto_publish.run(parsed)
-    # The switches now live on the setup page, not the overview (round 4).
-    return RedirectResponse("/freigabe/setup", status_code=303)
+    # The switches live on /einstellungen (round 5: setup.html -> settings.html).
+    return RedirectResponse("/einstellungen", status_code=303)
 
 
 # -- Freigabe: the review queue -------------------------------------------------
@@ -123,12 +124,14 @@ async def _render_review(
 ):
     queue = await services.review_queue.run()
     channels = await services.channels.run()
+    history = await services.review_history.run()
     return services.templates.TemplateResponse(
         request,
         "review.html",
         {
             "queue": queue,
             "channels": channels,
+            "history": history,
             "now": datetime.now(UTC),
             "multi_target": len(services.destinations) > 1,
             "error": error,
@@ -143,11 +146,18 @@ async def review_page(request: Request, services: ServicesDep):
 
 
 @router.get("/freigabe/setup")
-async def setup_page(request: Request, services: ServicesDep):
-    """Instagram connection, the channel switches, and PUBLIC_BASE_URL readiness.
+async def setup_page_redirect() -> RedirectResponse:
+    """Old bookmarks/links: the setup page moved to /einstellungen (round 5)."""
+    return RedirectResponse("/einstellungen", status_code=303)
 
-    Moved off the overview (round 4, owner: "a setup page, which should live
-    in the freigabe view"): `services.overview` still carries the token (the
+
+@router.get("/einstellungen")
+async def settings_page(request: Request, services: ServicesDep):
+    """Instagram connection, the channel switches, and the automation overview.
+
+    Replaces /freigabe/setup (round 5, owner: "the setup thing needs to be
+    moved to a settings thingy, where I would also like to have some view
+    into the automation"). `services.overview` still carries the token (the
     one place that reads it), and `limit=0` skips fetching any posts for a
     page that never lists them.
     """
@@ -155,12 +165,15 @@ async def setup_page(request: Request, services: ServicesDep):
     channels = await services.channels.run()
     return services.templates.TemplateResponse(
         request,
-        "setup.html",
+        "settings.html",
         {
             "ov": overview,
             "now": datetime.now(UTC),
             "last_run": services.sync_job.last_run,
             "channels": channels,
+            "automation": services.automation,
+            "jobs": services.automation.jobs(),
+            "next_run": services.automation.next_run(),
         },
     )
 
@@ -199,7 +212,7 @@ async def approve_draft(
 
 @router.post("/freigabe/drafts/{draft_id}/reject")
 async def reject_draft(services: ServicesDep, draft_id: str):
-    await services.discard_draft.run(draft_id)
+    await services.reject_draft.run(draft_id)
     return RedirectResponse("/freigabe", status_code=303)
 
 

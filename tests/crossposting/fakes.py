@@ -31,6 +31,7 @@ from diffus.crossposting.domain.entities import (
     Post,
     PostDraft,
     Preview,
+    ReviewLogEntry,
     Token,
 )
 from diffus.crossposting.domain.errors import InvalidImageError
@@ -40,6 +41,7 @@ from diffus.crossposting.domain.ports import (
     DraftRepository,
     PostRepository,
     PreviewRepository,
+    ReviewLogRepository,
     TokenRepository,
 )
 
@@ -310,6 +312,19 @@ class FakeChannels:
         self.dirty = True
 
 
+class FakeReviewLog:
+    def __init__(self) -> None:
+        self._entries: list[ReviewLogEntry] = []
+        self.dirty = False
+
+    async def add(self, entry: ReviewLogEntry) -> None:
+        self._entries.append(entry)
+        self.dirty = True
+
+    async def recent(self, limit: int = 30) -> list[ReviewLogEntry]:
+        return list(reversed(self._entries))[:limit]
+
+
 class FakeEventDirectory:
     """EventDirectory over a fixed mapping, the way a real calendar-context adapter would answer."""
 
@@ -415,6 +430,7 @@ class FakeUnitOfWork:
         tokens: FakeTokens | None = None,
         drafts: FakeDrafts | None = None,
         channels: FakeChannels | None = None,
+        review_log: FakeReviewLog | None = None,
     ) -> None:
         # Kept as concrete types privately so __aexit__/commit/rollback can flip
         # `dirty`; exposed publicly at the Protocol type, like SqlUnitOfWork's
@@ -425,12 +441,14 @@ class FakeUnitOfWork:
         self._tokens = tokens if tokens is not None else FakeTokens()
         self._drafts = drafts if drafts is not None else FakeDrafts()
         self._channels = channels if channels is not None else FakeChannels()
+        self._review_log = review_log if review_log is not None else FakeReviewLog()
         self.posts: PostRepository = self._posts
         self.deliveries: DeliveryRepository = self._deliveries
         self.previews: PreviewRepository = self._previews
         self.tokens: TokenRepository = self._tokens
         self.drafts: DraftRepository = self._drafts
         self.channels: ChannelSettingsRepository = self._channels
+        self.review_log: ReviewLogRepository = self._review_log
         self.commits = 0
 
     def __call__(self) -> Self:
@@ -452,6 +470,7 @@ class FakeUnitOfWork:
             or self._tokens.dirty
             or self._drafts.dirty
             or self._channels.dirty
+            or self._review_log.dirty
         )
         try:
             if exc_type is None and dirty:
@@ -473,3 +492,4 @@ class FakeUnitOfWork:
         self._tokens.dirty = False
         self._drafts.dirty = False
         self._channels.dirty = False
+        self._review_log.dirty = False

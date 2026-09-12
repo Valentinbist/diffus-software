@@ -25,11 +25,14 @@ from diffus.crossposting.domain.entities import (
     Post,
     PostDraft,
     PublishTargets,
+    ReviewLogEntry,
+    ReviewOutcome,
     SubCalendarOption,
     Token,
 )
 from diffus.crossposting.presentation import display
 from diffus.crossposting.presentation.routes import build_templates
+from diffus.shared.automation import Automation, JobRun, JobStatus
 
 templates = build_templates(ZoneInfo("Europe/Berlin"))
 # wizard_event.html (step 1) only ever renders with the calendar on — /neu
@@ -116,9 +119,9 @@ def render_index(
         last_run=last_run,
         multi_target=multi_target,
         events=events,
-        event_pills=display.EVENT_PILLS,
+        event_options=display.EVENT_OPTIONS,
         source=source,
-        source_pills=display.SOURCE_PILLS,
+        source_options=display.SOURCE_OPTIONS,
         channels=channels or make_channels(),
         review_count=review_count,
     )
@@ -131,18 +134,50 @@ def render_post(view: PostView, multi_target: bool = False) -> str:
 
 
 def render_review(
-    queue: ReviewQueue, channels: Channels | None = None, error: str | None = None
+    queue: ReviewQueue,
+    channels: Channels | None = None,
+    error: str | None = None,
+    history: tuple[ReviewLogEntry, ...] = (),
+    multi_target: bool = False,
 ) -> str:
     return templates.env.get_template("review.html").render(
-        queue=queue, channels=channels or make_channels(), now=NOW, multi_target=False, error=error
+        queue=queue,
+        channels=channels or make_channels(),
+        now=NOW,
+        multi_target=multi_target,
+        error=error,
+        history=history,
     )
 
 
-def render_setup(
-    ov: Overview, last_run: LastRun | None = None, channels: Channels | None = None
+def make_job_status(
+    key: str = "posts",
+    label: str = "Instagram-Abgleich",
+    runs: tuple[JobRun, ...] = (),
+    sync_action: str = "/sync",
+) -> JobStatus:
+    return JobStatus(key=key, label=label, runs=runs, sync_action=sync_action)
+
+
+def render_settings(
+    ov: Overview,
+    last_run: LastRun | None = None,
+    channels: Channels | None = None,
+    jobs: tuple[JobStatus, ...] = (),
+    next_run: datetime | None = None,
+    interval_minutes: int = 5,
 ) -> str:
-    return templates.env.get_template("setup.html").render(
-        ov=ov, now=NOW, last_run=last_run, channels=channels or make_channels()
+    automation = Automation(
+        interval_minutes=interval_minutes, jobs=lambda: jobs, next_run=lambda: next_run
+    )
+    return templates.env.get_template("settings.html").render(
+        ov=ov,
+        now=NOW,
+        last_run=last_run,
+        channels=channels or make_channels(),
+        automation=automation,
+        jobs=jobs,
+        next_run=next_run,
     )
 
 
@@ -252,16 +287,18 @@ def test_not_connected_shows_an_attention_line_pointing_to_setup():
     html = render_index(Overview(token=None, posts=[]))
 
     assert "Instagram ist nicht verbunden" in html
-    assert 'href="/freigabe/setup">Einrichtung</a>' in html
+    assert 'href="/einstellungen">Einstellungen</a>' in html
     assert "Noch keine Posts" in html
     assert "Jetzt abgleichen" not in html
     assert "Instagram verbinden" not in html
 
 
-def test_connected_shows_the_last_sync_status_without_setup_buttons():
+def test_connected_shows_no_status_line_and_no_attention_when_all_is_well():
     html = render_index(connected(), last_run=LastRun(at=NOW - timedelta(minutes=4)))
 
-    assert "Läuft. Letzter Abgleich vor 4 Minuten." in html
+    assert "Letzter Abgleich" not in html
+    assert "Läuft." not in html
+    assert 'class="meta attention"' not in html
     assert "Jetzt abgleichen" not in html
     assert "Neu verbinden" not in html
 
@@ -270,7 +307,7 @@ def test_connected_without_publish_scope_shows_the_attention_line():
     html = render_index(Overview(token=make_token(can_publish=False), posts=[]))
 
     assert "Instagram neu verbinden, um Veröffentlichen freizuschalten" in html
-    assert 'href="/freigabe/setup">Einrichtung</a>' in html
+    assert 'href="/einstellungen">Einstellungen</a>' in html
     assert "Neu verbinden" not in html
 
 
@@ -280,8 +317,9 @@ def test_failed_sync_is_called_out():
         last_run=LastRun(at=NOW - timedelta(minutes=1), sync_error="boom"),
     )
 
-    assert "ist fehlgeschlagen" in html
-    assert "boom" in html
+    assert "Der letzte Abgleich ist fehlgeschlagen" in html
+    assert 'href="/einstellungen">Einstellungen</a>' in html
+    assert "Letzter Abgleich" not in html  # the status line itself moved to /einstellungen
 
 
 def test_refresh_failure_shows_the_attention_line():
@@ -291,14 +329,14 @@ def test_refresh_failure_shows_the_attention_line():
     )
 
     assert "Token-Auffrischung fehlgeschlagen" in html
-    assert 'href="/freigabe/setup">Einrichtung</a>' in html
+    assert 'href="/einstellungen">Einstellungen</a>' in html
 
 
 def test_expiring_token_shows_the_attention_line():
     html = render_index(Overview(token=make_token(days_left=3), posts=[]))
 
     assert "in 3 Tagen" in html
-    assert 'href="/freigabe/setup">Einrichtung</a>' in html
+    assert 'href="/einstellungen">Einstellungen</a>' in html
 
 
 def test_only_one_attention_line_shows_when_several_conditions_apply():
@@ -307,7 +345,7 @@ def test_only_one_attention_line_shows_when_several_conditions_apply():
         last_run=LastRun(at=NOW - timedelta(minutes=1), refresh_error="nope"),
     )
 
-    assert html.count('href="/freigabe/setup">Einrichtung</a>') == 1
+    assert html.count('→ <a href="/einstellungen">Einstellungen</a></p>') == 1
     assert "Token-Auffrischung fehlgeschlagen" in html
     assert "in 3 Tagen" not in html
 
@@ -397,7 +435,7 @@ def test_caption_is_escaped_and_missing_caption_is_labelled():
     )
     empty = render_index(connected(PostView(post=make_post(caption=None), deliveries=[])))
 
-    assert "<script>" not in evil
+    assert "<script>alert" not in evil  # base.html carries its own tiny inline script
     assert "&lt;script&gt;" in evil
     assert "Ohne Text" in empty
 
@@ -484,9 +522,9 @@ def test_nav_shows_the_calendar_link_only_when_the_calendar_context_is_enabled()
         last_run=None,
         multi_target=False,
         events="all",
-        event_pills=display.EVENT_PILLS,
+        event_options=display.EVENT_OPTIONS,
         source="all",
-        source_pills=display.SOURCE_PILLS,
+        source_options=display.SOURCE_OPTIONS,
         channels=make_channels(),
         review_count=0,
     )
@@ -496,10 +534,10 @@ def test_nav_shows_the_calendar_link_only_when_the_calendar_context_is_enabled()
     assert 'href="/calendar"' not in without_calendar
 
 
-def test_base_layout_has_the_topbar_brand_and_modal_dialog():
+def test_base_layout_has_the_sidebar_brand_and_modal_dialog():
     html = render_index(Overview(token=None, posts=[]))
 
-    assert 'class="topbar"' in html
+    assert '<aside class="side">' in html
     assert ">diffus.space<" in html
     assert '<dialog id="modal"' in html
     assert '<div class="page">' in html
@@ -523,7 +561,7 @@ def test_post_detail_kicker_back_link_is_hidden_inside_the_modal():
 # -- event filter pills and linked events ----------------------------------------
 
 
-def test_event_pills_show_only_when_the_calendar_context_is_enabled():
+def test_termin_filter_shows_only_when_the_calendar_context_is_enabled():
     ov = Overview(token=None, posts=[])
     enabled = build_templates(ZoneInfo("Europe/Berlin"), calendar_enabled=True)
 
@@ -533,16 +571,29 @@ def test_event_pills_show_only_when_the_calendar_context_is_enabled():
         last_run=None,
         multi_target=False,
         events="with",
-        event_pills=display.EVENT_PILLS,
+        event_options=display.EVENT_OPTIONS,
         source="all",
-        source_pills=display.SOURCE_PILLS,
+        source_options=display.SOURCE_OPTIONS,
         channels=make_channels(),
         review_count=0,
     )
+    without_calendar = render_index(ov)
 
-    assert '<span class="pill current">Mit Termin</span>' in with_calendar
-    assert 'href="/?source=all&events=without"' in with_calendar
-    assert 'href="/?source=all&events=with"' not in render_index(ov)  # disabled: no pills at all
+    assert '<option value="with" selected>Mit Termin</option>' in with_calendar
+    assert '<option value="without">Ohne Termin</option>' in with_calendar
+    assert 'name="events"' not in without_calendar  # disabled: no Termin filter at all
+
+
+def test_filters_are_one_labelled_form_that_submits_itself():
+    html = render_index(Overview(token=None, posts=[]), source="diffus")
+
+    assert html.count('<form class="filters" method="get" action="/" data-autosubmit>') == 1
+    assert "<label>Herkunft" in html
+    assert '<select name="source">' in html
+    assert '<option value="diffus" selected>App</option>' in html
+    # The button is only for browsers without JS; base.html marks <html class="js">.
+    assert '<button type="submit" class="btn nojs">Anwenden</button>' in html
+    assert 'classList.add("js")' in html
 
 
 def test_index_row_lists_linked_events_and_marks_a_removed_one():
@@ -582,11 +633,11 @@ def test_post_detail_termine_section_and_link_button_only_when_calendar_enabled(
 # -- Social Posts: rename, source pill, Freigabe notice, Kanäle form --------------
 
 
-def test_social_posts_h1_and_kicker():
+def test_social_posts_h1_without_a_kicker():
     html = render_index(Overview(token=None, posts=[]))
 
     assert "<h1 class=\"h1\">Social Posts</h1>" in html
-    assert "Instagram · Telegram · App" in html
+    assert "Instagram · Telegram · App" not in html  # round 6: the owner asked for it to go
 
 
 def test_index_row_shows_a_source_pill_before_the_caption():
@@ -626,80 +677,184 @@ def test_index_no_longer_shows_the_kanaele_switches():
     assert "Ohne Haken wartet ein Post für diesen Kanal auf Freigabe." not in html
 
 
-def test_neu_button_opens_the_wizard_in_a_modal():
+def test_header_cta_is_the_only_neu_entry_point():
     html = render_index(Overview(token=None, posts=[]))
 
-    assert 'href="/neu" data-modal>Neu</a>' in html
+    assert 'href="/neu" data-modal>Neuer Post</a>' in html
+    assert "+ Neu" not in html
+    assert ">Neu<" not in html  # no bare "Neu" button left in the page body
 
 
-# -- setup page ---------------------------------------------------------------
+def test_header_cta_says_neues_event_erstellen_with_the_calendar():
+    ov = Overview(token=None, posts=[])
+    enabled = build_templates(ZoneInfo("Europe/Berlin"), calendar_enabled=True)
+
+    html = enabled.env.get_template("index.html").render(
+        ov=ov,
+        now=NOW,
+        last_run=None,
+        multi_target=False,
+        events="all",
+        event_options=display.EVENT_OPTIONS,
+        source="all",
+        source_options=display.SOURCE_OPTIONS,
+        channels=make_channels(),
+        review_count=0,
+    )
+
+    assert 'href="/neu" data-modal>Neues Event erstellen</a>' in html
+    assert 'href="/einstellungen"' in html
 
 
-def test_setup_page_has_the_instagram_kanaele_and_veroeffentlichung_sections():
-    html = render_setup(Overview(token=None, posts=[]))
+# -- settings page (replaces setup.html, round 5) ------------------------------
 
-    assert "<h1 class=\"h1\">Einrichtung</h1>" in html
+
+def test_settings_page_has_the_automatik_instagram_and_channels_sections():
+    html = render_settings(Overview(token=None, posts=[]))
+
+    assert '<h1 class="h1">Einstellungen</h1>' in html
+    assert '<p class="eyebrow">Automatik</p>' in html
     assert '<p class="eyebrow">Instagram</p>' in html
-    assert '<p class="eyebrow">Kanäle</p>' in html
-    assert '<p class="eyebrow">Veröffentlichung</p>' in html
+    assert '<p class="eyebrow">Automatisch veröffentlichen</p>' in html
 
 
-def test_setup_page_pills_show_einrichtung_current_and_link_back_to_the_queue():
-    html = render_setup(Overview(token=None, posts=[]))
-
-    assert '<a class="pill" href="/freigabe">Warteschlange</a>' in html
-    assert '<span class="pill current">Einrichtung</span>' in html
-
-
-def test_setup_page_kanaele_form_checkbox_uses_the_destination_text_form():
+def test_settings_page_kanaele_form_checkbox_uses_the_destination_text_form():
     channels = make_channels(
         telegram=(TelegramChannel(destination=C1, label="Telegram", auto_publish=True),)
     )
 
-    html = render_setup(Overview(token=None, posts=[]), channels=channels)
+    html = render_settings(Overview(token=None, posts=[]), channels=channels)
 
     assert 'name="auto" value="telegram:c1" checked' in html
     assert 'action="/channels"' in html
     assert "Ohne Haken wartet ein Post für diesen Kanal auf Freigabe." in html
+    assert "– automatisch veröffentlichen" not in html  # suffix dropped (round 5)
 
 
-def test_setup_page_kanaele_form_shows_the_instagram_hint_when_not_ready():
+def test_settings_page_says_not_connected_once_in_the_instagram_section_only():
     channels = make_channels(instagram_connected=False)
 
-    html = render_setup(Overview(token=None, posts=[]), channels=channels)
+    html = render_settings(Overview(token=None, posts=[]), channels=channels)
 
-    assert "Instagram ist nicht verbunden." in html
+    assert "Instagram ist noch nicht verbunden." in html
+    # The switch form carries no hint of its own: the Instagram section right
+    # above already says why publishing there is off.
+    assert "Instagram ist nicht verbunden." not in html
 
 
-def test_setup_page_offers_to_connect_when_instagram_is_not_connected():
-    html = render_setup(Overview(token=None, posts=[]))
+def test_settings_page_offers_to_connect_when_instagram_is_not_connected():
+    html = render_settings(Overview(token=None, posts=[]))
 
     assert "Instagram verbinden" in html
     assert 'href="/oauth/login"' in html
+    assert "Instagram ist noch nicht verbunden." in html
 
 
-def test_setup_page_sync_form_carries_next_back_to_setup():
-    html = render_setup(connected(), last_run=LastRun(at=NOW - timedelta(minutes=4)))
+def test_settings_page_shows_connected_without_a_sync_status_line():
+    html = render_settings(connected())
 
-    assert "Jetzt abgleichen" in html
-    assert 'name="next" value="/freigabe/setup"' in html
+    assert "Verbunden." in html
+    assert "Läuft. Letzter Abgleich" not in html  # that line moved into the job block
 
 
-def test_setup_page_offers_to_reconnect_when_the_token_is_expiring():
-    html = render_setup(Overview(token=make_token(days_left=3), posts=[]))
+def test_settings_page_offers_to_reconnect_when_the_token_is_expiring():
+    html = render_settings(Overview(token=make_token(days_left=3), posts=[]))
 
     assert "in 3 Tagen" in html
     assert "Neu verbinden" in html
 
 
-def test_setup_page_shows_the_public_base_url_readiness_hint():
-    ready = render_setup(Overview(token=None, posts=[]), channels=make_channels())
-    not_ready = render_setup(
-        Overview(token=None, posts=[]), channels=make_channels(instagram_public_https=False)
+def test_settings_page_shows_the_public_base_url_readiness_hint():
+    ready = render_settings(Overview(token=make_token(), posts=[]), channels=make_channels())
+    not_ready = render_settings(
+        Overview(token=make_token(), posts=[]),
+        channels=make_channels(instagram_public_https=False),
     )
 
+    assert "Instagram kann die Bilder dieser App laden." in ready
     assert "PUBLIC_BASE_URL ist keine öffentliche https-Adresse" not in ready
     assert "PUBLIC_BASE_URL ist keine öffentliche https-Adresse" in not_ready
+
+
+# -- settings page: the Automatik section (jobs, runs, next_run) ---------------
+
+
+def test_settings_job_that_never_ran():
+    html = render_settings(Overview(token=None, posts=[]), jobs=(make_job_status(),))
+
+    assert "Instagram-Abgleich" in html
+    assert "Noch nicht gelaufen (seit dem Start)." in html
+
+
+def test_settings_job_ok_shows_zuletzt_and_the_summary():
+    run = JobRun(at=NOW - timedelta(minutes=4), summary="2 neue Posts · 1 zugestellt")
+
+    html = render_settings(Overview(token=None, posts=[]), jobs=(make_job_status(runs=(run,)),))
+
+    assert "Läuft. Zuletzt vor 4 Minuten." in html
+    assert "2 neue Posts · 1 zugestellt" in html
+
+
+def test_settings_job_error_shows_the_error_not_the_summary():
+    run = JobRun(at=NOW - timedelta(minutes=1), error="boom", summary="sollte nicht erscheinen")
+
+    html = render_settings(Overview(token=None, posts=[]), jobs=(make_job_status(runs=(run,)),))
+
+    assert "Hakt. Zuletzt vor 1 Minute fehlgeschlagen." in html
+    assert "boom" in html
+    assert "sollte nicht erscheinen" not in html
+
+
+def test_settings_job_sync_form_carries_next_to_einstellungen():
+    html = render_settings(Overview(token=None, posts=[]), jobs=(make_job_status(),))
+
+    assert "Jetzt abgleichen" in html
+    assert 'name="next" value="/einstellungen"' in html
+
+
+def test_settings_runs_details_only_shows_with_more_than_one_run():
+    one_run = (JobRun(at=NOW, summary="x"),)
+    two_runs = (
+        JobRun(at=NOW, summary="x"),
+        JobRun(at=NOW - timedelta(hours=1), error="boom"),
+    )
+
+    single = render_settings(Overview(token=None, posts=[]), jobs=(make_job_status(runs=one_run),))
+    multiple = render_settings(
+        Overview(token=None, posts=[]), jobs=(make_job_status(runs=two_runs),)
+    )
+
+    assert "<details" not in single
+    assert "<details" in multiple
+    assert "Letzte Läufe" in multiple
+    assert "✓ x" in multiple
+    assert "✕ " in multiple
+
+
+def test_settings_next_run_shows_relative_time_only_when_known():
+    with_next = render_settings(
+        Overview(token=None, posts=[]), next_run=NOW + timedelta(minutes=4)
+    )
+    without_next = render_settings(Overview(token=None, posts=[]), next_run=None)
+
+    assert "Nächster Lauf in 4 Minuten" in with_next
+    assert "Nächster Lauf" not in without_next
+
+
+def test_settings_interval_wording_is_singular_with_one_job_plural_with_two():
+    one_job = render_settings(Overview(token=None, posts=[]), jobs=(make_job_status(),))
+    two_jobs = render_settings(
+        Overview(token=None, posts=[]),
+        jobs=(
+            make_job_status(),
+            make_job_status(
+                key="calendar", label="Kalender-Abgleich", sync_action="/calendar/sync"
+            ),
+        ),
+    )
+
+    assert "läuft der Abgleich von selbst" in one_job
+    assert "laufen die Abgleiche von selbst" in two_jobs
 
 
 # -- post detail: Freigabe + Instagram delivery + SKIPPED wording ----------------
@@ -741,13 +896,8 @@ def test_review_page_empty_state():
     html = render_review(ReviewQueue(drafts=[], posts=[]))
 
     assert "Nichts wartet auf Freigabe." in html
-
-
-def test_review_page_pills_show_warteschlange_current_and_link_to_setup():
-    html = render_review(ReviewQueue(drafts=[], posts=[]))
-
-    assert '<span class="pill current">Warteschlange</span>' in html
-    assert '<a class="pill" href="/freigabe/setup">Einrichtung</a>' in html
+    assert "Warteschlange" not in html  # the pills are gone (round 5)
+    assert "Einrichtung" not in html
 
 
 def test_review_page_draft_block_shows_hint_targets_and_a_failed_error():
@@ -774,7 +924,23 @@ def test_review_page_draft_block_shows_hint_targets_and_a_failed_error():
     assert 'name="telegram" value="c1" checked' in html
 
 
-def test_review_page_post_block_lists_proposed_destinations():
+def test_review_page_draft_freigeben_and_ablehnen_share_one_actions_block():
+    draft = PostDraft.new(
+        caption="Hallo Welt", images=[DraftImage("image/jpeg", 1, 1, b"x")], now=NOW
+    )
+    review = DraftReview(draft=draft, image_urls=(), hint=None)
+
+    html = render_review(ReviewQueue(drafts=[review], posts=[]))
+
+    start = html.index('<div class="actions">')
+    actions = html[start : html.index("</div>", start)]
+    assert f'form="draft-approve-{draft.id}"' in actions
+    assert f'form="draft-reject-{draft.id}"' in actions
+    assert "btn-solid" in actions
+    assert html.count('<div class="actions">') == 1
+
+
+def test_review_page_post_block_lists_proposed_destinations_and_shares_one_actions_block():
     view = PostView(post=make_post(), deliveries=[])
     review = PostReview(view=view, proposed=[C1])
 
@@ -783,6 +949,21 @@ def test_review_page_post_block_lists_proposed_destinations():
     assert f'action="/freigabe/posts/{view.post.id}/approve"' in html
     assert f'action="/freigabe/posts/{view.post.id}/reject"' in html
     assert 'name="telegram" value="c1" checked' in html
+    assert f'form="post-approve-{view.post.id}"' in html
+    assert f'form="post-reject-{view.post.id}"' in html
+
+
+def test_review_page_post_block_labels_the_checkbox_from_channels_falling_back_to_sink_label():
+    view = PostView(post=make_post(), deliveries=[])
+    review = PostReview(view=view, proposed=[C1, Destination("signal", "s1")])
+    channels = make_channels(
+        telegram=(TelegramChannel(destination=C1, label="Werkstatt-Chat", auto_publish=False),)
+    )
+
+    html = render_review(ReviewQueue(drafts=[], posts=[review]), channels=channels)
+
+    assert "Werkstatt-Chat" in html  # matched by destination
+    assert "Signal s1" in html  # no matching channel: sink_label + address
 
 
 def test_review_page_post_block_shows_the_instagram_origin_line_under_the_caption():
@@ -795,6 +976,56 @@ def test_review_page_post_block_shows_the_instagram_origin_line_under_the_captio
         'href="https://instagram.com/p/p1/" target="_blank" rel="noopener">Instagram ✓</a>'
         in html
     )
+
+
+# -- Freigabe page: Verlauf (history) --------------------------------------------
+
+
+def test_review_page_history_empty_state():
+    html = render_review(ReviewQueue(drafts=[], posts=[]), history=())
+
+    assert '<p class="eyebrow">Verlauf</p>' in html
+    assert "Noch nichts entschieden." in html
+
+
+def test_review_page_history_approved_entry_links_to_the_post():
+    entry = ReviewLogEntry.new(
+        "post", ReviewOutcome.APPROVED, "Siebdruck-Nachmittag", (C1,), NOW, post_id="p1"
+    )
+
+    html = render_review(ReviewQueue(drafts=[], posts=[]), history=(entry,))
+
+    assert '<div class="log">' in html
+    assert 'href="/posts/p1" data-modal>Siebdruck-Nachmittag</a>' in html
+    assert "Freigegeben → Telegram" in html
+
+
+def test_review_page_history_rejected_entry_has_no_post_link():
+    entry = ReviewLogEntry.new("draft", ReviewOutcome.REJECTED, "Verworfen", (), NOW)
+
+    html = render_review(ReviewQueue(drafts=[], posts=[]), history=(entry,))
+
+    assert "Verworfen</p>" in html
+    assert 'href="/posts/' not in html
+    assert "Abgelehnt" in html
+
+
+def test_review_page_history_auto_entry_says_automatisch_veroeffentlicht():
+    entry = ReviewLogEntry.new(
+        "post", ReviewOutcome.AUTO, "Auto-Post", (C1,), NOW, post_id="p2"
+    )
+
+    html = render_review(ReviewQueue(drafts=[], posts=[]), history=(entry,))
+
+    assert "Automatisch veröffentlicht → Telegram" in html
+
+
+def test_review_page_history_entry_with_no_caption_says_ohne_text():
+    entry = ReviewLogEntry.new("draft", ReviewOutcome.REJECTED, None, (), NOW)
+
+    html = render_review(ReviewQueue(drafts=[], posts=[]), history=(entry,))
+
+    assert "Ohne Text" in html
 
 
 # -- compose wizard templates --------------------------------------------------------
@@ -930,7 +1161,7 @@ def test_base_layout_has_the_freigabe_badge_htmx_attributes():
     assert "Social Posts" in html
 
 
-def test_neu_link_shows_always_regardless_of_the_calendar_context():
+def test_nav_shows_einstellungen_and_never_a_neu_nav_link():
     ov = Overview(token=None, posts=[])
     enabled = build_templates(ZoneInfo("Europe/Berlin"), calendar_enabled=True)
 
@@ -940,15 +1171,15 @@ def test_neu_link_shows_always_regardless_of_the_calendar_context():
         last_run=None,
         multi_target=False,
         events="all",
-        event_pills=display.EVENT_PILLS,
+        event_options=display.EVENT_OPTIONS,
         source="all",
-        source_pills=display.SOURCE_PILLS,
+        source_options=display.SOURCE_OPTIONS,
         channels=make_channels(),
         review_count=0,
     )
     without_calendar = render_index(ov)
 
-    assert 'href="/neu" data-modal>+ Neu</a>' in with_calendar
-    assert 'href="/neu" data-modal>+ Neu</a>' in without_calendar
-    assert "+ Termin" not in with_calendar
-    assert "+ Termin" not in without_calendar
+    assert 'href="/einstellungen">Einstellungen</a>' in with_calendar
+    assert 'href="/einstellungen">Einstellungen</a>' in without_calendar
+    assert "+ Neu" not in with_calendar
+    assert "+ Neu" not in without_calendar
