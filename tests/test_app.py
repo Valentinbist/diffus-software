@@ -22,6 +22,7 @@ from diffus.calendar.application.sync_job import CalendarSyncJob
 from diffus.calendar.domain.entities import CalendarEvent, CalendarSnapshot, LinkablePost
 from diffus.calendar.presentation.routes import build_templates as build_calendar_templates
 from diffus.calendar.presentation.services import CalendarServices
+from diffus.crossposting.application.activity import GetActivity
 from diffus.crossposting.application.channels import GetChannels, SetAutoPublish
 from diffus.crossposting.application.connect_instagram import ConnectInstagram
 from diffus.crossposting.application.deliver import DeliverPost
@@ -45,6 +46,7 @@ from diffus.crossposting.application.review import (
     CountReview,
     GetReviewHistory,
     GetReviewQueue,
+    GetReviewStats,
     RejectPostDeliveries,
 )
 from diffus.crossposting.application.sync_job import SyncJob
@@ -219,6 +221,9 @@ def make_services(
         automation=Automation(
             interval_minutes=5, jobs=lambda: [job_status(job)], next_run=lambda: None
         ),
+        tz=ZoneInfo("Europe/Berlin"),
+        activity=GetActivity(uow=uow),
+        review_stats=GetReviewStats(uow=uow),
     )
 
 
@@ -770,6 +775,32 @@ async def test_review_count_badge_requires_auth(settings_env):
         resp = await client.get("/freigabe/count")
 
     assert resp.status_code == 401
+
+
+async def test_backdrop_is_empty_without_any_stored_preview(settings_env):
+    services = make_services(FakeUnitOfWork(), FakeSink(), FakeMedia())
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.get("/backdrop")
+
+    assert resp.status_code == 200
+    assert resp.text == ""
+
+
+async def test_backdrop_shows_the_newest_stored_preview(settings_env):
+    services = make_services(await make_uow(), FakeSink(), FakeMedia())
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test", auth=("u", "p")
+    ) as client:
+        resp = await client.get("/backdrop")
+
+    assert resp.status_code == 200
+    assert '<div class="backdrop" style="background-image:url(/posts/p1/media/0)">' in resp.text
 
 
 async def test_a_polled_post_with_auto_off_queues_for_freigabe_and_can_be_approved(settings_env):

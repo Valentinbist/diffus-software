@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from diffus.crossposting.application.channels import InstagramChannel
 from diffus.crossposting.application.overview import PostView
@@ -20,7 +21,9 @@ from diffus.crossposting.domain.entities import (
     ReviewLogEntry,
     ReviewOutcome,
 )
+from diffus.crossposting.domain.stats import ReviewStats
 from diffus.shared.automation import JobRun, JobStatus
+from diffus.shared.presentation.display import format_duration
 
 # Sinks the connector knows how to label. A sink with no entry falls back to
 # its name, capitalized, so a new adapter renders sanely before display.py
@@ -67,6 +70,20 @@ STATUS_TEXT = {
 def stored_cover(view: PostView) -> int | None:
     """Index of the first media item the connector holds a still image for."""
     return next((i for i in range(len(view.post.media)) if i in view.stored_previews), None)
+
+
+def backdrop_url(views: Sequence[PostView]) -> str | None:
+    """The newest post's stored cover, for the site-wide blurred backdrop (`GET /backdrop`).
+
+    Never the CDN URL: a CSS background-image can't carry the `<img>`s' own
+    referrerpolicy, and the CDN link may already be dead by the time this is
+    fetched — only a stored preview is safe to hotlink from a stylesheet.
+    """
+    for view in views:
+        index = stored_cover(view)
+        if index is not None:
+            return f"/posts/{view.post.id}/media/{index}"
+    return None
 
 
 def sink_label(sink: str) -> str:
@@ -173,7 +190,9 @@ def job_status(job: SyncJob) -> JobStatus:
         JobRun(at=run.at, error=_run_error(run), summary=sync_summary(run.report))
         for run in reversed(job.runs)
     )
-    return JobStatus(key="posts", label="Instagram-Abgleich", runs=runs, sync_action="/sync")
+    return JobStatus(
+        key="posts", label="Instagram-Abgleich", runs=runs, sync_action="/sync", streak=job.streak
+    )
 
 
 def _destination_label(d: Destination, multi_target: bool) -> str:
@@ -206,3 +225,36 @@ def instagram_hint(ch: InstagramChannel) -> str | None:
             "nicht laden. Telegram geht trotzdem."
         )
     return None
+
+
+def inbox_zero_line(stats: ReviewStats, now: datetime) -> str | None:
+    """The Freigabe empty state's second line — how long, and whether it's a record.
+
+    None whenever the log has no decision to measure from (empty_since is
+    None): the "record" language only makes sense once at least one stretch
+    has actually been measured.
+    """
+    if stats.empty_since is None:
+        return None
+    current = now - stats.empty_since
+    if current < timedelta(seconds=60):
+        return "Gerade erst geleert."
+    current_text = format_duration(current, dative=True)
+    if stats.longest_empty is None:
+        return f"Seit {current_text} leer."
+    if current >= stats.longest_empty:
+        return f"Seit {current_text} leer – Rekord."
+    return f"Seit {current_text} leer. Rekord: {format_duration(stats.longest_empty)}."
+
+
+def reaction_line(stats: ReviewStats) -> str | None:
+    """The Freigabe "Verlauf" section's reaction-time line, None without a measured reaction."""
+    if stats.reactions == 0:
+        return None
+    assert stats.mean_reaction is not None  # reactions > 0 implies both are set
+    if stats.reactions == 1:
+        return f"Entschieden nach {format_duration(stats.mean_reaction, dative=True)}."
+    assert stats.fastest_reaction is not None
+    mean = format_duration(stats.mean_reaction, dative=True)
+    fastest = format_duration(stats.fastest_reaction)
+    return f"Im Schnitt nach {mean} entschieden, Rekord {fastest}."

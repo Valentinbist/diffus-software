@@ -106,7 +106,7 @@ async def test_resend_refuses_a_delivery_waiting_for_freigabe():
     resend, uow = make_resend()
     await uow.posts.upsert(make_post())
     existing = Delivery(post_id="p1", destination=DEST)
-    existing.queue_for_review()
+    existing.queue_for_review(datetime.now(UTC))
     await uow.deliveries.save(existing)
     await uow.commit()
 

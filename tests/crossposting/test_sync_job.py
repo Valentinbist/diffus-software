@@ -212,3 +212,40 @@ async def test_failed_refresh_is_recorded_for_the_ui():
     assert job.last_run is not None
     assert job.last_run.refresh_error == "simulated refresh failure"
     assert job.last_run.sync_error is None
+
+
+# -- streak: consecutive error-free runs -------------------------------------
+
+
+async def test_clean_runs_extend_the_streak():
+    job, _tokens, _auth = make_job(tokens=FakeTokens(make_token(age_days=1)))
+
+    await job.run()
+    await job.run()
+
+    assert job.streak.current == 2
+    assert job.streak.best == 2
+    assert job.streak.broken_at is None
+
+
+async def test_a_failed_sync_resets_current_and_sets_broken_at_while_best_survives():
+    job, tokens, _auth = make_job(tokens=FakeTokens(make_token(age_days=1)))
+    await job.run()
+    await job.run()
+
+    job.sync.source = FailingSource(RuntimeError("instagram is down"))
+    await job.run()
+
+    assert job.streak.current == 0
+    assert job.streak.broken_at == 2
+    assert job.streak.best == 2
+
+
+async def test_not_connected_does_not_touch_the_streak():
+    job, _tokens, _auth = make_job(tokens=FakeTokens(make_token(age_days=1)))
+    await job.run()
+
+    job.sync.source = FailingSource(NotConnectedError("no token"))
+    await job.run()
+
+    assert job.streak.current == 1  # the not-connected run never got recorded at all

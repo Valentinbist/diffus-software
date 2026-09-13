@@ -31,6 +31,7 @@ from diffus.crossposting.domain.entities import (
 )
 from diffus.crossposting.domain.errors import ConnectorError
 from diffus.crossposting.domain.ports import EventDirectory, UnitOfWorkFactory
+from diffus.crossposting.domain.stats import ReviewStats, review_stats
 
 
 @dataclass
@@ -134,6 +135,9 @@ class ApprovePostDeliveries:
                     # Only a real click logs anything — a second "Freigeben" on an
                     # already-emptied queue (nothing left in REVIEW) is a no-op.
                     outcome = ReviewOutcome.APPROVED if to_send else ReviewOutcome.REJECTED
+                    queued_at = min(
+                        (r.queued_at for r in rows if r.queued_at is not None), default=None
+                    )
                     await uow.review_log.add(
                         ReviewLogEntry.new(
                             "post",
@@ -142,6 +146,7 @@ class ApprovePostDeliveries:
                             tuple(row.destination for row in to_send),
                             datetime.now(UTC),
                             post.id,
+                            queued_at=queued_at,
                         )
                     )
                 await uow.commit()
@@ -165,9 +170,18 @@ class RejectPostDeliveries:
             if rows:
                 post = await uow.posts.get(post_id)
                 caption = post.caption if post is not None else None
+                queued_at = min(
+                    (r.queued_at for r in rows if r.queued_at is not None), default=None
+                )
                 await uow.review_log.add(
                     ReviewLogEntry.new(
-                        "post", ReviewOutcome.REJECTED, caption, (), datetime.now(UTC), post_id
+                        "post",
+                        ReviewOutcome.REJECTED,
+                        caption,
+                        (),
+                        datetime.now(UTC),
+                        post_id,
+                        queued_at=queued_at,
                     )
                 )
             await uow.commit()
@@ -182,3 +196,15 @@ class GetReviewHistory:
     async def run(self, limit: int = 30) -> list[ReviewLogEntry]:
         async with self.uow() as uow:
             return await uow.review_log.recent(limit)
+
+
+@dataclass
+class GetReviewStats:
+    """The Freigabe page's inbox-zero and reaction-time lines — see domain/stats.py."""
+
+    uow: UnitOfWorkFactory
+
+    async def run(self, day_start: datetime) -> ReviewStats:
+        async with self.uow() as uow:
+            entries = await uow.review_log.decisions()
+        return review_stats(entries, day_start)

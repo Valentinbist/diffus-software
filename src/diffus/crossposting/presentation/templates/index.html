@@ -2,7 +2,9 @@
 {% set active_page = "posts" %}
 
 {% block content %}
+{% set hello = now|greeting %}{% if hello %}<p class="meta kicker">{{ hello }}</p>{% endif %}
 <h1 class="h1">Social Posts</h1>
+{% if milestone %}<p class="meta attention">Das war Post Nummer {{ milestone }}.</p>{% endif %}
 
 {% if not ov.token %}
   <p class="meta attention">Instagram ist nicht verbunden → <a href="/einstellungen">Einstellungen</a></p>
@@ -89,6 +91,15 @@
 {% else %}
   <p class="meta">Noch keine Posts abgeglichen.</p>
 {% endfor %}
+</section>
+
+{% set grid = activity.posted_at|heatmap(now) %}
+<section class="details">
+  <p class="eyebrow">Letzte 16 Wochen</p>
+  <div class="heatmap" role="img" aria-label="{{ grid.total }} Posts in den letzten 16 Wochen">
+    {% for week in grid.weeks %}<div class="week">{% for d in week %}<span class="cell l{{ d.level }}{% if d.future %} future{% endif %}" title="{{ d.count }} {{ 'Post' if d.count == 1 else 'Posts' }} · {{ d.label }}"></span>{% endfor %}</div>{% endfor %}
+  </div>
+  <p class="meta">{{ grid.total }} {{ 'Post' if grid.total == 1 else 'Posts' }}{% if grid.busiest > 1 %} · meiste an einem Tag: {{ grid.busiest }}{% endif %}</p>
 </section>
 
 <p class="meta foot">Nur die letzten 20 Posts. Was vor der Verbindung gepostet wurde, wird übersprungen.{% if calendar_enabled %} Der Termin-Filter wirkt nur auf diese 20 Posts.{% endif %}</p>

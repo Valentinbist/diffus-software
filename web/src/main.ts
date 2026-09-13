@@ -77,4 +77,27 @@ for (const field of document.querySelectorAll<HTMLSelectElement | HTMLInputEleme
   field.addEventListener("change", () => field.form?.requestSubmit());
 }
 
+// Diffus mode: after 5 minutes with no pointer, keyboard, scroll or touch
+// input, blur the page — "diffus" is German for "blurry, diffuse", so an
+// idle screen quietly turns on-brand instead of just going stale. The next
+// such input reverses it and restarts the 5-minute timer.
+function setupDiffusMode(): void {
+  const IDLE_MS = 5 * 60 * 1000;
+  const root = document.documentElement;
+  let timer: ReturnType<typeof setTimeout>;
+
+  function wake(): void {
+    root.classList.remove("diffus");
+    clearTimeout(timer);
+    timer = setTimeout(() => root.classList.add("diffus"), IDLE_MS);
+  }
+
+  const events = ["pointermove", "pointerdown", "keydown", "scroll", "touchstart", "wheel"] as const;
+  for (const type of events) {
+    document.addEventListener(type, wake, { passive: true });
+  }
+  wake();
+}
+
 setupModal();
+setupDiffusMode();

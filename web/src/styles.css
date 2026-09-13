@@ -28,6 +28,7 @@
   --width-default: 620px;
   --radius-button: 9999px;
   --border-width-button: 2px;
+  --backdrop-opacity: .12;
 }
 
 html { color-scheme: dark; }
@@ -40,6 +41,42 @@ body {
   line-height: var(--line-height-body);
   -webkit-font-smoothing: antialiased;
 }
+
+/* Film grain: a fixed, textured overlay over the whole viewport so the black
+   canvas reads as paper instead of a void. Pure decoration — pointer events
+   pass through, and it never affects layout (fixed elements are out of
+   flow, so this doesn't become a grid column on >=900px screens). The
+   <dialog> renders in the browser's top layer, above this regardless of
+   z-index. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  pointer-events: none;
+  opacity: 0.06;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+}
+
+/* Ambient backdrop: the newest post's cover, blurred, behind everything.
+   Fixed + z-index: -1 so it stays out of the >=900px grid (fixed elements
+   don't become grid items) — yet it still paints above the plain black
+   canvas colour, since that canvas background sits further back than any
+   stacking context. It fades in only once htmx swaps in a real image (the
+   backend sets the [style] background then; empty responses leave it gone). */
+.backdrop {
+  position: fixed;
+  inset: -10vh -10vw;
+  z-index: -1;
+  background: center / cover no-repeat;
+  filter: blur(48px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 1.5s ease;
+}
+.backdrop[style] { opacity: var(--backdrop-opacity, .12); }
+
 main {
   box-sizing: border-box;
   max-width: var(--width-default);
@@ -329,6 +366,15 @@ main { padding: 40px var(--space-horizontal) 40px; }
   line-height: 1.4em;
   text-align: center;
 }
+/* A gentle, endless pulse draws the eye to a non-zero Freigabe count
+   without nagging; off entirely for anyone who asked for less motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .badge { animation: breathe 2.4s ease-in-out infinite; }
+}
+@keyframes breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.12); }
+}
 .source {
   display: inline-block;
   margin-right: 8px;
@@ -369,3 +415,47 @@ textarea, input[type="text"], input[type="date"], input[type="time"] {
   main { padding-top: 24px; }
   .h1 { font-size: 24px; }
 }
+
+/* -- Round 7: diffus mode, activity heatmap --------------------------------- */
+
+/* Diffus mode: the page blurs itself once idle — "diffus" is German for
+   "blurry, diffuse", so a screen nobody is looking at quietly turns
+   on-brand. main.ts adds this class after 5 minutes with no input and
+   removes it on the next one. Never on body or .side itself: .nav sits
+   inside .side as position: fixed on phones, and a filter on an ancestor
+   would break that fixed positioning. */
+.diffus main,
+.diffus .side > .brand,
+.diffus .side > .cta {
+  filter: blur(7px);
+}
+@media (min-width: 900px) {
+  .diffus .side .nav { filter: blur(7px); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  main { transition: filter 2.5s ease; }
+  /* .brand is an <a>, whose own rule transitions its hover colour — keep that. */
+  .side > .brand { transition: color 120ms linear, filter 2.5s ease; }
+  /* .cta is also a .btn, whose own rule already sets a transition shorthand
+     for its hover colours — extend that list instead of replacing it. */
+  .side > .cta {
+    transition: color 120ms linear, background-color 120ms linear, border-color 120ms linear,
+      filter 2.5s ease;
+  }
+}
+@media (prefers-reduced-motion: no-preference) and (min-width: 900px) {
+  .side .nav { transition: filter 2.5s ease; }
+}
+
+/* Social Posts activity heatmap: 16 weeks x 7 days, oldest week first. A
+   plain white ramp, no colour, like the rest of the system. .future cells
+   (today's week, not reached yet) stay in the grid but invisible, so the
+   column count never shifts. 16 * (11px + 3px gap) - 3px ~= 221px, fits a
+   402px phone with room either side. */
+.heatmap { display: flex; gap: 3px; margin-top: 10px; }
+.week { display: flex; flex-direction: column; gap: 3px; }
+.cell { width: 11px; height: 11px; background: rgba(255, 255, 255, .07); }
+.cell.l1 { background: rgba(255, 255, 255, .38); }
+.cell.l2 { background: rgba(255, 255, 255, .68); }
+.cell.l3 { background: var(--diffus-white); }
+.cell.future { visibility: hidden; }

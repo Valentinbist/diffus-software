@@ -43,3 +43,30 @@ async def test_the_lock_lets_concurrent_runs_complete_without_raising():
 
     assert job.last_run is not None
     assert job.last_run.error is None
+
+
+# -- streak: consecutive error-free runs -------------------------------------
+
+
+async def test_clean_runs_extend_the_streak():
+    job = make_job()
+
+    await job.run()
+    await job.run()
+
+    assert job.streak.current == 2
+    assert job.streak.best == 2
+    assert job.streak.broken_at is None
+
+
+async def test_a_failure_resets_current_and_sets_broken_at_while_best_survives():
+    job = make_job()
+    await job.run()
+    await job.run()
+
+    job.sync.calendar = FailingCalendar(RuntimeError("kalender.digital is down"))
+    await job.run()
+
+    assert job.streak.current == 0
+    assert job.streak.broken_at == 2
+    assert job.streak.best == 2

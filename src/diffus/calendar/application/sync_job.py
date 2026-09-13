@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from diffus.calendar.application.sync_calendar import CalendarSyncReport, SyncCalendar
-from diffus.shared.automation import RUN_HISTORY
+from diffus.shared.automation import RUN_HISTORY, Streak
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,7 @@ class CalendarSyncJob:
         # A short history for the settings page's "Letzte Läufe" — oldest
         # dropped once full, `last_run` is always the same object as `runs[-1]`.
         self.runs: deque[CalendarLastRun] = deque(maxlen=RUN_HISTORY)
+        self.streak = Streak()
 
     async def run(self) -> None:
         async with self.lock:
@@ -60,3 +61,4 @@ class CalendarSyncJob:
             run = CalendarLastRun(at=datetime.now(UTC), error=error, report=report)
             self.last_run = run
             self.runs.append(run)
+            self.streak = self.streak.record(error is None)

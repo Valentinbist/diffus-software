@@ -14,6 +14,7 @@ from diffus.crossposting.application.review import (
     CountReview,
     GetReviewHistory,
     GetReviewQueue,
+    GetReviewStats,
     RejectPostDeliveries,
 )
 from diffus.crossposting.domain.entities import (
@@ -48,26 +49,29 @@ def make_post(post_id: str = "p1") -> Post:
 
 
 async def make_uow_with_review_post(
-    post_id: str = "p1", destinations: Sequence[Destination] = (TELEGRAM, SIGNAL)
+    post_id: str = "p1",
+    destinations: Sequence[Destination] = (TELEGRAM, SIGNAL),
+    queued_at: datetime | None = None,
 ) -> FakeUnitOfWork:
     uow = FakeUnitOfWork()
     await uow.posts.upsert(make_post(post_id))
     for dest in destinations:
         delivery = Delivery(post_id=post_id, destination=dest)
-        delivery.queue_for_review()
+        delivery.queue_for_review(queued_at or datetime.now(UTC))
         await uow.deliveries.save(delivery)
     await uow.commit()
     return uow
 
 
-def make_reviewable_draft(event_ref: str | None = None) -> PostDraft:
+def make_reviewable_draft(event_ref: str | None = None, now: datetime | None = None) -> PostDraft:
+    now = now or datetime.now(UTC)
     draft = PostDraft.new(
         "Hallo",
         [DraftImage("image/jpeg", 1, 1, b"x")],
-        datetime.now(UTC),
+        now,
         event_ref=event_ref,
     )
-    draft.submit_for_review(PublishTargets(instagram=False, destinations=(TELEGRAM,)))
+    draft.submit_for_review(PublishTargets(instagram=False, destinations=(TELEGRAM,)), now)
     return draft
 
 
@@ -262,3 +266,33 @@ async def test_get_review_history_returns_newest_first():
 
     assert len(history) == 1
     assert history[0].outcome == ReviewOutcome.APPROVED
+
+
+# -- GetReviewStats -------------------------------------------------------------
+
+
+async def test_get_review_stats_reads_decisions_and_computes_stats():
+    day_start = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
+    uow = await make_uow_with_review_post(
+        destinations=(TELEGRAM,), queued_at=datetime(2024, 1, 1, 11, 55, tzinfo=UTC)
+    )
+    await ApprovePostDeliveries(
+        uow=uow,
+        deliver=DeliverPost(media=FakeMedia(), sinks={"telegram": FakeSink()}, uow=uow),
+        destinations=[TELEGRAM],
+    ).run("p1", [TELEGRAM])
+
+    stats = await GetReviewStats(uow=uow).run(day_start)
+
+    assert stats.decisions == 1
+    assert stats.decided_today == 1
+    assert stats.reactions == 1
+
+
+async def test_get_review_stats_is_empty_with_no_decisions():
+    stats = await GetReviewStats(uow=FakeUnitOfWork()).run(
+        datetime(2024, 1, 1, tzinfo=UTC)
+    )
+
+    assert stats.decisions == 0
+    assert stats.empty_since is None

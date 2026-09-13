@@ -12,6 +12,7 @@
   <script type="module" src="{{ assets.js }}"></script>
 </head>
 <body>
+  <div class="backdrop" hx-get="/backdrop" hx-trigger="load" hx-swap="outerHTML"></div>
   <aside class="side">
     <a class="brand plain" href="/">diffus.space</a>
     <a class="btn btn-solid cta" href="/neu" data-modal>{% if calendar_enabled %}Neues Event erstellen{% else %}Neuer Post{% endif %}</a>

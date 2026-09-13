@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import contextlib
-from datetime import UTC, date, datetime, time
+import html
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlencode
@@ -32,6 +33,7 @@ from diffus.crossposting.domain.errors import (
 from diffus.crossposting.presentation import display
 from diffus.crossposting.presentation.services import Services, get_services
 from diffus.shared.presentation.auth import require_auth
+from diffus.shared.presentation.display import count_since, day_start, milestone
 from diffus.shared.presentation.templates import build_templates as _build_shared_templates
 
 router = APIRouter(dependencies=[Depends(require_auth)])
@@ -85,12 +87,19 @@ async def index(request: Request, services: ServicesDep, events: str = "all", so
     overview.posts = display.filter_by_events(overview.posts, events)
     overview.posts = display.filter_by_source(overview.posts, source)
     review_count = await services.review_count.run()
+    now = datetime.now(UTC)
+    start = day_start(now, services.tz)
+    # 17 weeks of slack for the heatmap's own 16-week window (build_templates'
+    # `heatmap` filter re-derives the exact local Mon-Sun boundaries; a wider
+    # cutoff here just avoids ever clipping it at a timezone edge).
+    activity = await services.activity.run(start - timedelta(weeks=17))
+    milestone_number = milestone(activity.total, count_since(activity.posted_at, start))
     return services.templates.TemplateResponse(
         request,
         "index.html",
         {
             "ov": overview,
-            "now": datetime.now(UTC),
+            "now": now,
             "last_run": services.sync_job.last_run,
             "multi_target": len(services.destinations) > 1,
             "events": events,
@@ -98,6 +107,8 @@ async def index(request: Request, services: ServicesDep, events: str = "all", so
             "source": source,
             "source_options": display.SOURCE_OPTIONS,
             "review_count": review_count,
+            "activity": activity,
+            "milestone": milestone_number,
         },
     )
 
@@ -125,6 +136,9 @@ async def _render_review(
     queue = await services.review_queue.run()
     channels = await services.channels.run()
     history = await services.review_history.run()
+    now = datetime.now(UTC)
+    stats = await services.review_stats.run(day_start(now, services.tz))
+    queue_empty = not queue.drafts and not queue.posts
     return services.templates.TemplateResponse(
         request,
         "review.html",
@@ -132,9 +146,16 @@ async def _render_review(
             "queue": queue,
             "channels": channels,
             "history": history,
-            "now": datetime.now(UTC),
+            "now": now,
             "multi_target": len(services.destinations) > 1,
             "error": error,
+            "stats": stats,
+            "milestone": milestone(stats.decisions, stats.decided_today),
+            # Only shown while the queue is actually empty right now: the log
+            # can't yet know whether today's still-open stretch is a record
+            # (see domain/stats.py).
+            "inbox_zero": display.inbox_zero_line(stats, now) if queue_empty else None,
+            "reaction": display.reaction_line(stats),
         },
         status_code=status_code,
     )
@@ -184,6 +205,24 @@ async def review_count_badge(services: ServicesDep):
     if count <= 0:
         return HTMLResponse("")
     return HTMLResponse(f'<span class="badge">{count}</span>')
+
+
+@router.get("/backdrop")
+async def backdrop(services: ServicesDep):
+    """The newest post's blurred cover, behind every page of every context.
+
+    base.html fetches this with htmx after load, the same way it fetches the
+    Freigabe badge — so the calendar's pages get the newest post's backdrop
+    too, without the calendar context ever knowing posts exist.
+    """
+    overview = await services.overview.run(limit=5)
+    url = display.backdrop_url(overview.posts)
+    if url is None:
+        return HTMLResponse("")
+    return HTMLResponse(
+        f'<div class="backdrop" style="background-image:url({html.escape(url)})"></div>',
+        headers={"Cache-Control": "private, max-age=300"},
+    )
 
 
 @router.post("/freigabe/drafts/{draft_id}/approve")

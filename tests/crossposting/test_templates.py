@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from diffus.crossposting.application.activity import Activity
 from diffus.crossposting.application.channels import Channels, InstagramChannel, TelegramChannel
 from diffus.crossposting.application.overview import Overview, PostView
 from diffus.crossposting.application.review import DraftReview, PostReview, ReviewQueue
@@ -30,9 +31,11 @@ from diffus.crossposting.domain.entities import (
     SubCalendarOption,
     Token,
 )
+from diffus.crossposting.domain.stats import ReviewStats
 from diffus.crossposting.presentation import display
 from diffus.crossposting.presentation.routes import build_templates
-from diffus.shared.automation import Automation, JobRun, JobStatus
+from diffus.shared.automation import Automation, JobRun, JobStatus, Streak
+from diffus.shared.presentation.display import EMPTY_LINES
 
 templates = build_templates(ZoneInfo("Europe/Berlin"))
 # wizard_event.html (step 1) only ever renders with the calendar on — /neu
@@ -41,6 +44,7 @@ templates = build_templates(ZoneInfo("Europe/Berlin"))
 templates_enabled = build_templates(ZoneInfo("Europe/Berlin"), calendar_enabled=True)
 
 NOW = datetime(2026, 9, 3, 10, 0, tzinfo=UTC)  # 12:00 in Berlin
+NO_STREAK = Streak()
 C1 = Destination("telegram", "c1")
 SUB_CALENDAR_OPTION = SubCalendarOption(
     id=5298948, name="Öffentliche Veranstaltung", color="#9BBB59"
@@ -104,6 +108,18 @@ def make_post(
     )
 
 
+EMPTY_ACTIVITY = Activity(total=0, posted_at=())
+EMPTY_STATS = ReviewStats(
+    decisions=0,
+    decided_today=0,
+    empty_since=None,
+    longest_empty=None,
+    mean_reaction=None,
+    fastest_reaction=None,
+    reactions=0,
+)
+
+
 def render_index(
     ov: Overview,
     last_run: LastRun | None = None,
@@ -112,10 +128,13 @@ def render_index(
     source: str = "all",
     channels: Channels | None = None,
     review_count: int = 0,
+    now: datetime = NOW,
+    activity: Activity = EMPTY_ACTIVITY,
+    milestone: int | None = None,
 ) -> str:
     return templates.env.get_template("index.html").render(
         ov=ov,
-        now=NOW,
+        now=now,
         last_run=last_run,
         multi_target=multi_target,
         events=events,
@@ -124,6 +143,8 @@ def render_index(
         source_options=display.SOURCE_OPTIONS,
         channels=channels or make_channels(),
         review_count=review_count,
+        activity=activity,
+        milestone=milestone,
     )
 
 
@@ -139,6 +160,10 @@ def render_review(
     error: str | None = None,
     history: tuple[ReviewLogEntry, ...] = (),
     multi_target: bool = False,
+    stats: ReviewStats = EMPTY_STATS,
+    inbox_zero: str | None = None,
+    reaction: str | None = None,
+    milestone: int | None = None,
 ) -> str:
     return templates.env.get_template("review.html").render(
         queue=queue,
@@ -147,6 +172,10 @@ def render_review(
         multi_target=multi_target,
         error=error,
         history=history,
+        stats=stats,
+        inbox_zero=inbox_zero,
+        reaction=reaction,
+        milestone=milestone,
     )
 
 
@@ -155,8 +184,9 @@ def make_job_status(
     label: str = "Instagram-Abgleich",
     runs: tuple[JobRun, ...] = (),
     sync_action: str = "/sync",
+    streak: Streak = NO_STREAK,
 ) -> JobStatus:
-    return JobStatus(key=key, label=label, runs=runs, sync_action=sync_action)
+    return JobStatus(key=key, label=label, runs=runs, sync_action=sync_action, streak=streak)
 
 
 def render_settings(
@@ -527,6 +557,8 @@ def test_nav_shows_the_calendar_link_only_when_the_calendar_context_is_enabled()
         source_options=display.SOURCE_OPTIONS,
         channels=make_channels(),
         review_count=0,
+        activity=EMPTY_ACTIVITY,
+        milestone=None,
     )
     without_calendar = render_index(ov)
 
@@ -576,6 +608,8 @@ def test_termin_filter_shows_only_when_the_calendar_context_is_enabled():
         source_options=display.SOURCE_OPTIONS,
         channels=make_channels(),
         review_count=0,
+        activity=EMPTY_ACTIVITY,
+        milestone=None,
     )
     without_calendar = render_index(ov)
 
@@ -670,6 +704,53 @@ def test_review_notice_shows_only_when_the_count_is_positive():
     assert "3 Posts warten auf Freigabe." in three
 
 
+# -- fun layer: greeting, milestone, heatmap -------------------------------------
+
+
+def test_index_shows_the_greeting_kicker_in_the_morning_only():
+    morning = datetime(2026, 9, 3, 5, 0, tzinfo=UTC)  # 07:00 Berlin
+    afternoon = datetime(2026, 9, 3, 12, 0, tzinfo=UTC)  # 14:00 Berlin
+
+    with_greeting = render_index(Overview(token=None, posts=[]), now=morning)
+    without_greeting = render_index(Overview(token=None, posts=[]), now=afternoon)
+
+    assert "Guten Morgen." in with_greeting
+    assert "Guten Morgen." not in without_greeting
+    assert "Nachtschicht?" not in without_greeting
+
+
+def test_index_milestone_line_appears_directly_under_the_h1():
+    html = render_index(Overview(token=None, posts=[]), milestone=100)
+    without = render_index(Overview(token=None, posts=[]), milestone=None)
+
+    assert "Das war Post Nummer 100." in html
+    assert "Das war Post Nummer" not in without
+
+
+def test_index_heatmap_section_has_16_weeks_of_7_cells_and_marks_future_days():
+    html = render_index(Overview(token=None, posts=[]))
+
+    assert html.count('<div class="week">') == 16
+    assert html.count('<span class="cell') == 112
+    assert "future" in html  # the current week's remaining days
+
+
+def test_index_heatmap_shows_the_total_and_busiest_day():
+    activity = Activity(
+        total=3,
+        posted_at=(
+            NOW - timedelta(days=1),
+            NOW - timedelta(days=1),
+            NOW - timedelta(days=2),
+        ),
+    )
+
+    html = render_index(Overview(token=None, posts=[]), activity=activity)
+
+    assert "3 Posts" in html
+    assert "meiste an einem Tag: 2" in html
+
+
 def test_index_no_longer_shows_the_kanaele_switches():
     html = render_index(Overview(token=None, posts=[]))
 
@@ -700,6 +781,8 @@ def test_header_cta_says_neues_event_erstellen_with_the_calendar():
         source_options=display.SOURCE_OPTIONS,
         channels=make_channels(),
         review_count=0,
+        activity=EMPTY_ACTIVITY,
+        milestone=None,
     )
 
     assert 'href="/neu" data-modal>Neues Event erstellen</a>' in html
@@ -831,6 +914,21 @@ def test_settings_runs_details_only_shows_with_more_than_one_run():
     assert "✕ " in multiple
 
 
+def test_settings_job_shows_the_streak_line():
+    without_streak = render_settings(
+        Overview(token=None, posts=[]), jobs=(make_job_status(runs=(JobRun(at=NOW),)),)
+    )
+    with_streak = render_settings(
+        Overview(token=None, posts=[]),
+        jobs=(
+            make_job_status(runs=(JobRun(at=NOW),), streak=Streak(current=37, best=120)),
+        ),
+    )
+
+    assert "Serie:" not in without_streak  # default JobStatus() carries an empty Streak
+    assert "Serie: 37 Läufe ohne Fehler. Rekord: 120." in with_streak
+
+
 def test_settings_next_run_shows_relative_time_only_when_known():
     with_next = render_settings(
         Overview(token=None, posts=[]), next_run=NOW + timedelta(minutes=4)
@@ -898,6 +996,24 @@ def test_review_page_empty_state():
     assert "Nichts wartet auf Freigabe." in html
     assert "Warteschlange" not in html  # the pills are gone (round 5)
     assert "Einrichtung" not in html
+
+
+def test_review_page_empty_state_carries_an_empty_line_and_the_inbox_zero_line():
+    berlin = ZoneInfo("Europe/Berlin")
+    expected_line = EMPTY_LINES[NOW.astimezone(berlin).timetuple().tm_yday % len(EMPTY_LINES)]
+
+    html = render_review(ReviewQueue(drafts=[], posts=[]), inbox_zero="Seit 5 Minuten leer.")
+
+    assert expected_line in html
+    assert "Seit 5 Minuten leer." in html
+
+
+def test_review_page_milestone_line():
+    html = render_review(ReviewQueue(drafts=[], posts=[]), milestone=7)
+    without = render_review(ReviewQueue(drafts=[], posts=[]), milestone=None)
+
+    assert "Das war Freigabe Nummer 7." in html
+    assert "Das war Freigabe Nummer" not in without
 
 
 def test_review_page_draft_block_shows_hint_targets_and_a_failed_error():
@@ -986,6 +1102,15 @@ def test_review_page_history_empty_state():
 
     assert '<p class="eyebrow">Verlauf</p>' in html
     assert "Noch nichts entschieden." in html
+
+
+def test_review_page_shows_the_reaction_line_under_verlauf():
+    without = render_review(ReviewQueue(drafts=[], posts=[]), reaction=None)
+    html = render_review(ReviewQueue(drafts=[], posts=[]), reaction="Entschieden nach 5 Minuten.")
+
+    assert "Entschieden nach 5 Minuten." not in without
+    assert "Entschieden nach 5 Minuten." in html
+    assert html.index('<p class="eyebrow">Verlauf</p>') < html.index("Entschieden nach 5 Minuten.")
 
 
 def test_review_page_history_approved_entry_links_to_the_post():
@@ -1176,6 +1301,8 @@ def test_nav_shows_einstellungen_and_never_a_neu_nav_link():
         source_options=display.SOURCE_OPTIONS,
         channels=make_channels(),
         review_count=0,
+        activity=EMPTY_ACTIVITY,
+        milestone=None,
     )
     without_calendar = render_index(ov)
 

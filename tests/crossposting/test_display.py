@@ -20,15 +20,19 @@ from diffus.crossposting.domain.entities import (
     ReviewLogEntry,
     ReviewOutcome,
 )
+from diffus.crossposting.domain.stats import ReviewStats
 from diffus.crossposting.presentation.display import (
     ChannelLine,
+    backdrop_url,
     channel_lines,
     delivery_label,
     filter_by_events,
     filter_by_source,
+    inbox_zero_line,
     instagram_hint,
     job_status,
     outcome_line,
+    reaction_line,
     sink_label,
     source_label,
     stored_cover,
@@ -356,3 +360,122 @@ def test_outcome_line_instagram_never_shows_its_address_even_multi_target():
     )
 
     assert outcome_line(entry, multi_target=True) == "Freigegeben → Instagram, Telegram c1"
+
+
+# -- backdrop_url -----------------------------------------------------------------
+
+
+def make_post_view_with_cover(post_id: str, stored: bool) -> PostView:
+    post = Post(
+        id=post_id,
+        source="instagram",
+        caption=None,
+        permalink=f"https://instagram.com/p/{post_id}/",
+        media=(MediaItem(url="https://cdn.example.com/x.jpg", type=MediaType.IMAGE),),
+        posted_at=NOW,
+    )
+    previews = frozenset({0}) if stored else frozenset()
+    return PostView(post=post, deliveries=[], stored_previews=previews)
+
+
+def test_backdrop_url_is_none_without_any_stored_preview():
+    views = [
+        make_post_view_with_cover("p1", stored=False),
+        make_post_view_with_cover("p2", stored=False),
+    ]
+
+    assert backdrop_url(views) is None
+
+
+def test_backdrop_url_is_the_first_view_with_a_stored_cover():
+    views = [
+        make_post_view_with_cover("p1", stored=False),
+        make_post_view_with_cover("p2", stored=True),
+        make_post_view_with_cover("p3", stored=True),
+    ]
+
+    assert backdrop_url(views) == "/posts/p2/media/0"
+
+
+def test_backdrop_url_is_none_with_no_posts_at_all():
+    assert backdrop_url([]) is None
+
+
+# -- inbox_zero_line ---------------------------------------------------------------
+
+
+def make_stats(
+    empty_since: datetime | None = None, longest_empty: timedelta | None = None
+) -> ReviewStats:
+    return ReviewStats(
+        decisions=0,
+        decided_today=0,
+        empty_since=empty_since,
+        longest_empty=longest_empty,
+        mean_reaction=None,
+        fastest_reaction=None,
+        reactions=0,
+    )
+
+
+def test_inbox_zero_line_is_none_without_any_decision():
+    assert inbox_zero_line(make_stats(), NOW) is None
+
+
+def test_inbox_zero_line_just_emptied():
+    stats = make_stats(empty_since=NOW - timedelta(seconds=30))
+
+    assert inbox_zero_line(stats, NOW) == "Gerade erst geleert."
+
+
+def test_inbox_zero_line_without_a_known_record():
+    stats = make_stats(empty_since=NOW - timedelta(minutes=5))
+
+    assert inbox_zero_line(stats, NOW) == "Seit 5 Minuten leer."
+
+
+def test_inbox_zero_line_at_or_past_the_record():
+    stats = make_stats(empty_since=NOW - timedelta(hours=2), longest_empty=timedelta(hours=1))
+
+    assert inbox_zero_line(stats, NOW) == "Seit 2 h leer – Rekord."
+
+
+def test_inbox_zero_line_short_of_the_record_names_it():
+    stats = make_stats(empty_since=NOW - timedelta(minutes=30), longest_empty=timedelta(hours=2))
+
+    assert inbox_zero_line(stats, NOW) == "Seit 30 Minuten leer. Rekord: 2 h."
+
+
+# -- reaction_line -----------------------------------------------------------------
+
+
+def test_reaction_line_is_none_without_any_reaction():
+    assert reaction_line(make_stats()) is None
+
+
+def test_reaction_line_singular_reaction():
+    stats = ReviewStats(
+        decisions=1,
+        decided_today=1,
+        empty_since=NOW,
+        longest_empty=None,
+        mean_reaction=timedelta(minutes=5),
+        fastest_reaction=timedelta(minutes=5),
+        reactions=1,
+    )
+
+    assert reaction_line(stats) == "Entschieden nach 5 Minuten."
+
+
+def test_reaction_line_several_reactions_shows_mean_and_record():
+    stats = ReviewStats(
+        decisions=3,
+        decided_today=0,
+        empty_since=NOW,
+        longest_empty=None,
+        mean_reaction=timedelta(minutes=12),
+        fastest_reaction=timedelta(minutes=2),
+        reactions=3,
+    )
+
+    assert reaction_line(stats) == "Im Schnitt nach 12 Minuten entschieden, Rekord 2 Minuten."

@@ -32,6 +32,7 @@ from diffus.crossposting.domain.entities import (
     PostDraft,
     Preview,
     ReviewLogEntry,
+    ReviewOutcome,
     Token,
 )
 from diffus.crossposting.domain.errors import InvalidImageError
@@ -87,6 +88,9 @@ class FakePosts:
 
     async def list_recent(self, limit: int = 20) -> list[Post]:
         return sorted(self._posts.values(), key=lambda p: p.posted_at, reverse=True)[:limit]
+
+    async def posted_at_since(self, since: datetime) -> list[datetime]:
+        return [p.posted_at for p in self._posts.values() if p.posted_at >= since]
 
 
 class FakeDeliveries:
@@ -232,6 +236,7 @@ class FakeDrafts:
             post_id=draft.post_id,
             published_at=draft.published_at,
             targets=draft.targets,
+            submitted_at=draft.submitted_at,
         )
         self.dirty = True
 
@@ -323,6 +328,9 @@ class FakeReviewLog:
 
     async def recent(self, limit: int = 30) -> list[ReviewLogEntry]:
         return list(reversed(self._entries))[:limit]
+
+    async def decisions(self) -> list[ReviewLogEntry]:
+        return [e for e in self._entries if e.outcome != ReviewOutcome.AUTO]
 
 
 class FakeEventDirectory:

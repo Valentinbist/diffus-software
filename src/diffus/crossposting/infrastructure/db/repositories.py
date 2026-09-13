@@ -10,6 +10,7 @@ RETURNING` is a single statement.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -101,6 +102,7 @@ def _row_to_delivery(row: DeliveryRow) -> Delivery:
         attempts=row.attempts,
         sent_at=row.sent_at,
         error=row.error,
+        queued_at=row.queued_at,
     )
 
 
@@ -113,6 +115,7 @@ def _delivery_to_row(delivery: Delivery) -> DeliveryRow:
         attempts=delivery.attempts,
         sent_at=delivery.sent_at,
         error=delivery.error,
+        queued_at=delivery.queued_at,
     )
 
 
@@ -139,6 +142,7 @@ def _draft_to_row(draft: PostDraft) -> PostDraftRow:
         published_at=draft.published_at,
         targets=_targets_to_json(draft.targets),
         event_ref=draft.event_ref,
+        submitted_at=draft.submitted_at,
     )
 
 
@@ -155,6 +159,7 @@ def _row_to_draft(row: PostDraftRow, images: Sequence[DraftImage]) -> PostDraft:
         published_at=row.published_at,
         targets=_json_to_targets(row.targets),
         event_ref=row.event_ref,
+        submitted_at=row.submitted_at,
     )
 
 
@@ -197,6 +202,12 @@ class SqlPostRepository:
             select(PostRow).order_by(PostRow.posted_at.desc()).limit(limit)
         )
         return [_row_to_post(row) for row in result.scalars().all()]
+
+    async def posted_at_since(self, since: datetime) -> list[datetime]:
+        result = await self._s.execute(
+            select(PostRow.posted_at).where(PostRow.posted_at >= since)
+        )
+        return list(result.scalars().all())
 
 
 class SqlDeliveryRepository:
@@ -354,6 +365,7 @@ class SqlDraftRepository:
         row.post_id = draft.post_id
         row.published_at = draft.published_at
         row.targets = _targets_to_json(draft.targets)
+        row.submitted_at = draft.submitted_at
 
     async def get(self, draft_id: str) -> PostDraft | None:
         row = await self._s.get(PostDraftRow, draft_id)
@@ -438,6 +450,7 @@ def _row_to_review_log_entry(row: ReviewLogRow) -> ReviewLogEntry:
         summary=row.summary,
         targets=tuple(Destination.parse(t) for t in row.targets),
         post_id=row.post_id,
+        queued_at=row.queued_at,
     )
 
 
@@ -455,11 +468,21 @@ class SqlReviewLogRepository:
                 post_id=entry.post_id,
                 summary=entry.summary,
                 targets=[str(d) for d in entry.targets],
+                queued_at=entry.queued_at,
             )
         )
 
     async def recent(self, limit: int = 30) -> list[ReviewLogEntry]:
         result = await self._s.execute(
             select(ReviewLogRow).order_by(ReviewLogRow.at.desc()).limit(limit)
+        )
+        return [_row_to_review_log_entry(row) for row in result.scalars().all()]
+
+    async def decisions(self) -> list[ReviewLogEntry]:
+        outcomes = [ReviewOutcome.APPROVED.value, ReviewOutcome.REJECTED.value]
+        result = await self._s.execute(
+            select(ReviewLogRow)
+            .where(ReviewLogRow.outcome.in_(outcomes))
+            .order_by(ReviewLogRow.at)
         )
         return [_row_to_review_log_entry(row) for row in result.scalars().all()]

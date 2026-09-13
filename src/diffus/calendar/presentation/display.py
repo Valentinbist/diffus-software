@@ -190,7 +190,11 @@ def job_status(job: CalendarSyncJob) -> JobStatus:
         for run in reversed(job.runs)
     )
     return JobStatus(
-        key="calendar", label="Kalender-Abgleich", runs=runs, sync_action="/calendar/sync"
+        key="calendar",
+        label="Kalender-Abgleich",
+        runs=runs,
+        sync_action="/calendar/sync",
+        streak=job.streak,
     )
 
 

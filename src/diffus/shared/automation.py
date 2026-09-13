@@ -30,6 +30,21 @@ class JobRun:
 
 
 @dataclass(frozen=True, slots=True)
+class Streak:
+    """Consecutive error-free runs of a job since the process started — in-memory, like `runs`."""
+
+    current: int = 0
+    best: int = 0
+    broken_at: int | None = None  # length of the streak the last failure ended; None before any
+
+    def record(self, ok: bool) -> Streak:
+        if ok:
+            current = self.current + 1
+            return Streak(current=current, best=max(self.best, current), broken_at=self.broken_at)
+        return Streak(current=0, best=self.best, broken_at=self.current)
+
+
+@dataclass(frozen=True, slots=True)
 class JobStatus:
     """One job's status, as the settings page shows it: label, history, and its own sync button."""
 
@@ -37,6 +52,7 @@ class JobStatus:
     label: str
     runs: tuple[JobRun, ...]
     sync_action: str
+    streak: Streak = Streak()
 
     @property
     def last(self) -> JobRun | None:

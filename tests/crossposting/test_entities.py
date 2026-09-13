@@ -116,10 +116,18 @@ def test_skip_marks_seen_without_sending():
 def test_queue_for_review_moves_a_pending_delivery_to_review():
     d = Delivery(post_id="p1", destination=Destination("telegram", "c1"))
 
-    d.queue_for_review()
+    d.queue_for_review(NOW)
 
     assert d.status == DeliveryStatus.REVIEW
     assert not d.can_retry()  # REVIEW is never retried by the poller
+
+
+def test_queue_for_review_stamps_queued_at():
+    d = Delivery(post_id="p1", destination=Destination("telegram", "c1"))
+
+    d.queue_for_review(NOW)
+
+    assert d.queued_at == NOW
 
 
 @pytest.mark.parametrize(
@@ -130,7 +138,7 @@ def test_queue_for_review_refuses_anything_but_pending(status):
     d = make_delivery(status)
 
     with pytest.raises(ValueError, match="cannot queue for review"):
-        d.queue_for_review()
+        d.queue_for_review(NOW)
 
 
 def test_approve_moves_a_review_delivery_back_to_pending():
@@ -305,10 +313,18 @@ TARGETS = PublishTargets(instagram=False, destinations=(Destination("telegram", 
 def test_submit_for_review_stores_targets_and_moves_to_review():
     draft = PostDraft.new("hello", [make_image()], NOW)
 
-    draft.submit_for_review(TARGETS)
+    draft.submit_for_review(TARGETS, NOW)
 
     assert draft.status == DraftStatus.REVIEW
     assert draft.targets == TARGETS
+
+
+def test_submit_for_review_stamps_submitted_at():
+    draft = PostDraft.new("hello", [make_image()], NOW)
+
+    draft.submit_for_review(TARGETS, NOW)
+
+    assert draft.submitted_at == NOW
 
 
 @pytest.mark.parametrize("status", [DraftStatus.REVIEW, DraftStatus.PUBLISHED, DraftStatus.FAILED])
@@ -317,12 +333,12 @@ def test_submit_for_review_refuses_anything_but_draft(status):
     draft.status = status
 
     with pytest.raises(ValueError, match="cannot submit for review"):
-        draft.submit_for_review(TARGETS)
+        draft.submit_for_review(TARGETS, NOW)
 
 
 def test_is_reviewable_is_true_for_review_with_targets():
     draft = PostDraft.new("hello", [make_image()], NOW)
-    draft.submit_for_review(TARGETS)
+    draft.submit_for_review(TARGETS, NOW)
 
     assert draft.is_reviewable()
 

@@ -97,7 +97,7 @@ async def test_claim_refuses_a_row_waiting_in_review(factory):
         await uow.posts.upsert(make_post())
         delivery = await uow.deliveries.claim("p1", dest)
         assert delivery is not None
-        delivery.queue_for_review()
+        delivery.queue_for_review(datetime.now(UTC))
         await uow.deliveries.save(delivery)
         await uow.commit()
 
@@ -118,7 +118,7 @@ async def test_in_review_groups_by_post_and_count_posts_in_review_counts_distinc
         ]:
             delivery = await uow.deliveries.claim(post_id, dest)
             assert delivery is not None
-            delivery.queue_for_review()
+            delivery.queue_for_review(datetime.now(UTC))
             await uow.deliveries.save(delivery)
         await uow.commit()
 
@@ -130,6 +130,67 @@ async def test_in_review_groups_by_post_and_count_posts_in_review_counts_distinc
     assert len(in_review["p1"]) == 2
     assert len(in_review["p2"]) == 1
     assert count == 2
+
+
+async def test_delivery_queued_at_round_trips(factory):
+    dest = Destination("telegram", "c1")
+    queued_at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    async with factory() as uow:
+        await uow.posts.upsert(make_post())
+        delivery = await uow.deliveries.claim("p1", dest)
+        assert delivery is not None
+        delivery.queue_for_review(queued_at)
+        await uow.deliveries.save(delivery)
+        await uow.commit()
+
+    async with factory() as uow:
+        [stored] = (await uow.deliveries.for_posts(["p1"]))["p1"]
+
+    assert stored.queued_at == queued_at
+
+
+# -- SqlPostRepository: posted_at_since ------------------------------------------
+
+
+async def test_posted_at_since_returns_posts_at_or_after_the_cutoff(factory):
+    cutoff = datetime(2026, 1, 2, tzinfo=UTC)
+    async with factory() as uow:
+        await uow.posts.upsert(
+            Post(
+                id="old",
+                source="instagram",
+                caption=None,
+                permalink="https://instagram.com/p/old/",
+                media=(),
+                posted_at=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+        )
+        await uow.posts.upsert(
+            Post(
+                id="at-cutoff",
+                source="instagram",
+                caption=None,
+                permalink="https://instagram.com/p/at-cutoff/",
+                media=(),
+                posted_at=cutoff,
+            )
+        )
+        await uow.posts.upsert(
+            Post(
+                id="new",
+                source="instagram",
+                caption=None,
+                permalink="https://instagram.com/p/new/",
+                media=(),
+                posted_at=datetime(2026, 1, 3, tzinfo=UTC),
+            )
+        )
+        await uow.commit()
+
+    async with factory() as uow:
+        posted_at = await uow.posts.posted_at_since(cutoff)
+
+    assert sorted(posted_at) == [cutoff, datetime(2026, 1, 3, tzinfo=UTC)]
 
 
 # -- SqlDraftRepository: targets/event_ref, the Freigabe queue, the FK lesson ----
@@ -153,7 +214,7 @@ async def test_add_flushes_the_draft_row_before_its_media_rows(factory):
 async def test_targets_and_event_ref_round_trip_through_add_and_get(factory):
     targets = PublishTargets(instagram=True, destinations=(Destination("telegram", "c1"),))
     draft = make_draft(event_ref="calendar:e1")
-    draft.submit_for_review(targets)
+    draft.submit_for_review(targets, datetime.now(UTC))
 
     async with factory() as uow:
         await uow.drafts.add(draft)
@@ -166,6 +227,34 @@ async def test_targets_and_event_ref_round_trip_through_add_and_get(factory):
     assert stored.status == DraftStatus.REVIEW
     assert stored.event_ref == "calendar:e1"
     assert stored.targets == targets
+
+
+async def test_submitted_at_round_trips_through_add_and_update(factory):
+    targets = PublishTargets(instagram=True, destinations=())
+    submitted_at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    draft = make_draft()
+    draft.submit_for_review(targets, submitted_at)
+
+    async with factory() as uow:
+        await uow.drafts.add(draft)
+        await uow.commit()
+
+    async with factory() as uow:
+        stored = await uow.drafts.get(draft.id)
+
+    assert stored is not None
+    assert stored.submitted_at == submitted_at
+
+    stored.mark_failed("boom")
+    async with factory() as uow:
+        await uow.drafts.update(stored)
+        await uow.commit()
+
+    async with factory() as uow:
+        after_update = await uow.drafts.get(draft.id)
+
+    assert after_update is not None
+    assert after_update.submitted_at == submitted_at
 
 
 async def test_a_draft_added_without_targets_or_event_ref_reads_back_as_none(factory):
@@ -190,7 +279,7 @@ async def test_update_persists_targets_alongside_status(factory):
         await uow.commit()
 
     targets = PublishTargets(instagram=False, destinations=(Destination("telegram", "c1"),))
-    draft.submit_for_review(targets)
+    draft.submit_for_review(targets, datetime.now(UTC))
     async with factory() as uow:
         await uow.drafts.update(draft)
         await uow.commit()
@@ -206,7 +295,7 @@ async def test_update_persists_targets_alongside_status(factory):
 async def test_in_review_lists_review_and_failed_drafts_ordered_by_created_at(factory):
     targets = PublishTargets(instagram=False, destinations=(Destination("telegram", "c1"),))
     old = make_draft(caption="Old", created_at=datetime(2026, 1, 1, tzinfo=UTC))
-    old.submit_for_review(targets)
+    old.submit_for_review(targets, datetime.now(UTC))
     newer = make_draft(caption="New", created_at=datetime(2026, 1, 2, tzinfo=UTC))
     newer.targets = targets
     newer.mark_failed("boom")
@@ -285,3 +374,61 @@ async def test_review_log_add_and_recent_round_trip_newest_first(factory):
     assert recent[0].targets == ()
     assert recent[0].post_id is None
     assert recent[0].outcome == ReviewOutcome.REJECTED
+
+
+async def test_review_log_queued_at_round_trips_and_is_none_for_auto(factory):
+    telegram = Destination("telegram", "c1")
+    queued_at = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    approved = ReviewLogEntry.new(
+        "post",
+        ReviewOutcome.APPROVED,
+        "Freigegeben",
+        (telegram,),
+        datetime(2026, 1, 1, 11, 0, tzinfo=UTC),
+        post_id="p1",
+        queued_at=queued_at,
+    )
+    auto = ReviewLogEntry.new(
+        "post", ReviewOutcome.AUTO, "Automatisch", (telegram,), datetime(2026, 1, 1, tzinfo=UTC)
+    )
+
+    async with factory() as uow:
+        await uow.review_log.add(approved)
+        await uow.review_log.add(auto)
+        await uow.commit()
+
+    async with factory() as uow:
+        recent = await uow.review_log.recent()
+
+    by_id = {e.id: e for e in recent}
+    assert by_id[approved.id].queued_at == queued_at
+    assert by_id[auto.id].queued_at is None
+
+
+async def test_decisions_excludes_auto_and_is_oldest_first(factory):
+    telegram = Destination("telegram", "c1")
+    auto = ReviewLogEntry.new(
+        "post", ReviewOutcome.AUTO, "Automatisch", (telegram,), datetime(2026, 1, 1, tzinfo=UTC)
+    )
+    rejected = ReviewLogEntry.new(
+        "draft", ReviewOutcome.REJECTED, "Abgelehnt", (), datetime(2026, 1, 3, tzinfo=UTC)
+    )
+    approved = ReviewLogEntry.new(
+        "post",
+        ReviewOutcome.APPROVED,
+        "Freigegeben",
+        (telegram,),
+        datetime(2026, 1, 2, tzinfo=UTC),
+        post_id="p1",
+    )
+
+    async with factory() as uow:
+        await uow.review_log.add(auto)
+        await uow.review_log.add(rejected)
+        await uow.review_log.add(approved)
+        await uow.commit()
+
+    async with factory() as uow:
+        decisions = await uow.review_log.decisions()
+
+    assert [e.id for e in decisions] == [approved.id, rejected.id]

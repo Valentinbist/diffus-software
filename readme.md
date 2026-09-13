@@ -125,6 +125,21 @@ each one's last few runs) all live on their own page, **/einstellungen**
 ("Einstellungen", in the nav); Social Posts itself keeps only a one-line
 attention notice pointing there when something needs it.
 
+## Small pleasures
+
+Small, dry touches that don't change what the app does (round 7):
+
+- A one-line **greeting** ("Guten Morgen.", "Nachtschicht?") above the Social Posts heading, at the right hour.
+- **Milestones** ("Das war Post Nummer 100.") called out the moment a round number is crossed, on Social Posts and Freigabe.
+- An **activity heatmap** of the last 16 weeks under the Social Posts feed.
+- An **inbox-zero line** on Freigabe: how long the queue has sat empty, and whether that's a record.
+- A **reaction-time line** on Freigabe's Verlauf: how fast things get decided, on average and at best.
+- Per-job **streaks** on Einstellungen: consecutive error-free syncs, and where the last one broke.
+- A blurred **backdrop** of the newest post behind every page, everywhere in the app.
+- The page **idles into a subtle blur** after a stretch with no interaction.
+- A touch of **film grain** over the whole page.
+- The Freigabe nav badge gets a soft **breathing** animation while something is waiting.
+
 ## Dev setup
 
 Python 3.14 + [uv](https://docs.astral.sh/uv/), plus a separate frontend build

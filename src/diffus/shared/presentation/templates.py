@@ -28,6 +28,11 @@ def build_templates(
     templates.env.filters["ago_future"] = display.format_until
     templates.env.filters["summary"] = display.summary
     templates.env.filters["error_text"] = display.error_text
+    templates.env.filters["streak_line"] = display.streak_line
+    templates.env.filters["duration"] = display.format_duration
+    templates.env.filters["greeting"] = lambda now: display.greeting(now, tz)
+    templates.env.filters["empty_line"] = lambda now: display.empty_line(now, tz)
+    templates.env.filters["heatmap"] = lambda stamps, now: display.heatmap(stamps, now, tz)
     # Environment.globals' inferred value type is narrower than `object` (it's seeded
     # from jinja2's untyped DEFAULT_NAMESPACE); widen it so arbitrary globals fit.
     env_globals = cast("MutableMapping[str, object]", templates.env.globals)

@@ -32,6 +32,7 @@ from diffus.calendar.presentation import display as calendar_display
 from diffus.calendar.presentation.routes import build_templates as build_calendar_templates
 from diffus.calendar.presentation.routes import router as calendar_router
 from diffus.calendar.presentation.services import CalendarServices
+from diffus.crossposting.application.activity import GetActivity
 from diffus.crossposting.application.channels import GetChannels, SetAutoPublish
 from diffus.crossposting.application.connect_instagram import ConnectInstagram
 from diffus.crossposting.application.deliver import DeliverPost
@@ -55,6 +56,7 @@ from diffus.crossposting.application.review import (
     CountReview,
     GetReviewHistory,
     GetReviewQueue,
+    GetReviewStats,
     RejectPostDeliveries,
 )
 from diffus.crossposting.application.sync_job import SyncJob
@@ -243,6 +245,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     reject_post = RejectPostDeliveries(uow=uow)
     reject_draft = RejectDraft(uow=uow)
+    activity = GetActivity(uow=uow)
+    review_stats = GetReviewStats(uow=uow)
 
     # Forward-declared here (built for real further down, inside "if
     # settings.calendar_enabled") so the `jobs` closure below can read it —
@@ -294,6 +298,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         reject_draft=reject_draft,
         events=events,
         automation=automation,
+        tz=tz,
+        activity=activity,
+        review_stats=review_stats,
     )
 
     if settings.calendar_enabled:

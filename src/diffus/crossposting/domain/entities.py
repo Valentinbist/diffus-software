@@ -109,7 +109,9 @@ class Delivery:
     other status, the same way a stray transition would corrupt the retry
     policy above. can_retry() is deliberately unchanged: a REVIEW row is
     never FAILED, so it is never retried by the poller (see docs/architecture.md,
-    Sharp edges) until a human approves or rejects it.
+    Sharp edges) until a human approves or rejects it. `queued_at` records
+    when it entered REVIEW — the Freigabe stats' reaction time is measured
+    from there (see domain/stats.py).
     """
 
     MAX_ATTEMPTS: ClassVar[int] = 5
@@ -121,6 +123,7 @@ class Delivery:
     attempts: int = 0
     sent_at: datetime | None = None
     error: str | None = None
+    queued_at: datetime | None = None
 
     def can_retry(self) -> bool:
         return self.status == DeliveryStatus.FAILED and self.attempts < self.MAX_ATTEMPTS
@@ -139,11 +142,12 @@ class Delivery:
         """Seen, deliberately not sent — what the first sync does with existing posts."""
         self.status = DeliveryStatus.SKIPPED
 
-    def queue_for_review(self) -> None:
+    def queue_for_review(self, now: datetime) -> None:
         """A fresh delivery to a non-auto channel waits for a human instead of sending."""
         if self.status != DeliveryStatus.PENDING:
             raise ValueError(f"cannot queue for review from {self.status}")
         self.status = DeliveryStatus.REVIEW
+        self.queued_at = now
 
     def approve(self) -> None:
         """A human chose this destination: back to PENDING, so the normal delivery path sends it."""
@@ -208,6 +212,10 @@ class PostDraft:
     # erstellen"; None for a standalone post. Parsed by whoever links the
     # resulting post back (see PublishDraft, EventDirectory.link).
     event_ref: str | None = None
+    # When submit_for_review() queued this for a human; None for a draft that
+    # published immediately (all-auto) or never left the upload step — see
+    # ReviewLogEntry.queued_at, which reads this straight off the draft.
+    submitted_at: datetime | None = None
 
     @classmethod
     def new(
@@ -229,12 +237,13 @@ class PostDraft:
     def public_media_url(self, base_url: str, index: int) -> str:
         return f"{base_url.rstrip('/')}/media/drafts/{self.id}/{index}?key={self.public_key}"
 
-    def submit_for_review(self, targets: PublishTargets) -> None:
+    def submit_for_review(self, targets: PublishTargets, now: datetime) -> None:
         """Queue this draft for a human to approve, with the targets it will publish to."""
         if self.status != DraftStatus.DRAFT:
             raise ValueError(f"cannot submit for review from {self.status}")
         self.targets = targets
         self.status = DraftStatus.REVIEW
+        self.submitted_at = now
 
     def is_reviewable(self) -> bool:
         """True when the Freigabe page can offer this draft: queued, or a retryable failure."""
@@ -458,6 +467,11 @@ class ReviewLogEntry:
     summary: str  # first non-empty caption line, <= SUMMARY_LIMIT chars, "" when none
     targets: tuple[Destination, ...]  # what it went (or would have gone) to; () for rejected
     post_id: str | None = None  # the resulting/affected post, None for a rejected draft
+    # When the thing this entry logs entered the Freigabe queue: None for
+    # AUTO entries (never queued — nothing to wait on) and for rows written
+    # before this field existed (migration 0008). The Freigabe stats'
+    # reaction time is `at - queued_at` — see domain/stats.py.
+    queued_at: datetime | None = None
 
     SUMMARY_LIMIT: ClassVar[int] = 90
 
@@ -470,6 +484,8 @@ class ReviewLogEntry:
         targets: Sequence[Destination],
         now: datetime,
         post_id: str | None = None,
+        *,
+        queued_at: datetime | None = None,
     ) -> ReviewLogEntry:
         return cls(
             id=uuid.uuid4().hex,
@@ -479,4 +495,5 @@ class ReviewLogEntry:
             summary=_summary_line(caption, cls.SUMMARY_LIMIT),
             targets=tuple(targets),
             post_id=post_id,
+            queued_at=queued_at,
         )

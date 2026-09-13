@@ -25,18 +25,21 @@ wired today; the model no longer assumes it.
 | Auth | `HTTPBasic` + `secrets.compare_digest`, creds from env | Needs TLS in front (Caddy) — required anyway for the OAuth redirect URI |
 | Wizard entry (round 4, entry point simplified round 5) | **One** three-step flow — Termin → Post → Vorschau — at `/neu` → `/posts/new` → its preview, each of the first two steps skippable, behind one entry point everywhere: the shell's own cta button (sidebar on desktop, top bar on phones) ("Neues Event erstellen" / "Neuer Post"), replacing round 4's own "+ Neu" nav link and every in-page "Neu" button; the event step writes through `EventDirectory.create_event` rather than the calendar owning its own form | Replaces two separate flows ("Termin anlegen" / "Post erstellen") that did the same two things in a different order; owner: "one wizard, one modal", then round 5: "the neu button should be in the header" |
 | Freigabe history | append-only `review_log`, one row per human decision or auto-publish | the queue only shows what is still open; the owner wants to see what happened |
+| Fun layer (round 7) | Freigabe reaction-time/inbox-zero stats computed from `review_log` via `queued_at` (`domain/stats.py::review_stats`, in-memory, no new table); per-job streaks (`shared/automation.py::Streak`) kept in memory like `runs`, reset on restart; the index heatmap and "Post Nummer N" milestone read straight from `posts` (`posted_at_since`); the site-wide blurred backdrop is served by its own route, `GET /backdrop` | make the site fun without a bigger data model: everything here is derived from data already stored, or is deliberately ephemeral (streaks) |
 
 ## Domain model
 
 ```text
 Post          id, source, caption, permalink, media, posted_at
 Destination   (sink, address)  value object; text form "telegram:-100…"
-Delivery      post_id, destination, status, attempts, sent_at, error
+Delivery      post_id, destination, status, attempts, sent_at, error, queued_at
               can_retry() / record_sent() / record_failure() / skip()
-              # Freigabe: queue_for_review() / approve() / reject() — PENDING -> REVIEW ->
+              # Freigabe: queue_for_review(now) / approve() / reject() — PENDING -> REVIEW ->
               # {PENDING, SKIPPED}, each raising ValueError from any other status. can_retry()
               # is deliberately unchanged: a REVIEW row is never FAILED, so the poller never
               # retries it — only a human (or the badge reminding them) moves it on.
+              # queued_at (migration 0008) is when queue_for_review(now) ran — the Freigabe
+              # stats' reaction time is measured from there (domain/stats.py).
 DeliveryStatus PENDING / REVIEW / SENT / FAILED / SKIPPED
 Token         source, access_token: AccessToken, external_user_id, expires_at, refreshed_at, scopes
               needs_refresh(now) / can_publish  # PUBLISH_SCOPE in scopes.split(",")
@@ -44,10 +47,12 @@ AccessToken   value object whose repr/str never reveal the secret
 Preview       a stored still image per (post_id, media index)
 MediaFile     (MediaItem, Path) — what a sink receives
 PostDraft     id, caption, public_key, images: DraftImage[], status, error, post_id, created_at, published_at,
-              targets: PublishTargets | None, event_ref: str | None  # "calendar:<event id>"
-              # a post being composed, between upload and publish — see "Public media route" below
+              targets: PublishTargets | None, event_ref: str | None, submitted_at: datetime | None
+              # "calendar:<event id>"; a post being composed, between upload and publish —
+              # see "Public media route" below
               mark_published(post_id, now) / mark_failed(error) / public_media_url(base, index)
-              submit_for_review(targets)  # DRAFT -> REVIEW, storing the chosen targets
+              submit_for_review(targets, now)  # DRAFT -> REVIEW, storing the chosen targets
+                                                 # and stamping submitted_at (migration 0008)
               is_reviewable()  # status in {REVIEW, FAILED} and targets is not None — the
                                 # Freigabe page offers a queued draft AND a retryable failure
 DraftStatus   DRAFT / REVIEW / PUBLISHED / FAILED
@@ -65,7 +70,22 @@ ComposeHint   event_id, title, caption, detail_url  # what the calendar offers t
 LinkedEvent   id, title, starts_at, detail_url, removed
               # the connector's own view of a calendar event, via EventDirectory — mirrors
               # calendar.domain.entities.LinkablePost the other way round
+ReviewLogEntry id, at, kind, outcome: ReviewOutcome, summary, targets, post_id, queued_at
+              # one append-only /freigabe "Verlauf" row (see "Freigabe (approval queue)");
+              # queued_at (migration 0008) is None for AUTO entries (never queued) and for
+              # rows written before this field existed
+ReviewOutcome APPROVED / REJECTED / AUTO
 ```
+
+`domain/stats.py` (stdlib only, no ports): `ReviewStats` (decisions, decided_today,
+empty_since, longest_empty, mean_reaction, fastest_reaction, reactions) and
+`review_stats(entries, day_start) -> ReviewStats` — turns `review_log`'s
+`(queued_at, at)` pairs into the Freigabe page's reaction-time and inbox-zero
+numbers. A "busy" interval is `[queued_at, at]` (or the point `[at]` without a
+known `queued_at`); merged overlapping/touching intervals' gaps are the past
+stretches with nothing queued — the queue is only *provably* empty between two
+decisions, which is why `longest_empty`/`empty_since` are shown only while the
+queue is empty right now (`presentation/display.py::inbox_zero_line`).
 
 Ports (`domain/ports.py`): `PostSource` (has a `source` name, fetches with a
 `Token`), `PostSink`, `MediaGateway`, `AuthGateway` (has a `source` name), the
@@ -126,7 +146,8 @@ going to has been switched on. There are two approval units:
   `SubmitDraft` checks every chosen channel with `all_auto()`; if all of
   them are on, it calls `PublishDraft` immediately, otherwise it calls
   `PostDraft.submit_for_review()` (`DRAFT → REVIEW`, storing the chosen
-  `PublishTargets` on the draft) and the draft waits on `/freigabe`.
+  `PublishTargets` and `submitted_at` on the draft) and the draft waits on
+  `/freigabe`.
   Approving it there (`ApproveDraft`) is the same `PublishDraft` call a
   ready-to-go draft would have taken immediately — Freigabe changes *when*
   publishing happens, never *how*.
@@ -149,7 +170,7 @@ this; a `REVIEW` row is never `FAILED`, so the poller's own retry loop never
 touches it — only a human (via `/freigabe`, with the nav's live count
 badge from `GET /freigabe/count`) or a switch flip moves it on.
 
-## Schema (4 tables, + 2 more in migration `0005`, + 1 more and 2 columns in `0006`, + 1 more in `0007`)
+## Schema (4 tables, + 2 more in migration `0005`, + 1 more and 2 columns in `0006`, + 1 more in `0007`, + 3 columns in `0008`)
 
 ```sql
 tokens      (source PK, access_token, external_user_id, expires_at, refreshed_at, scopes)
@@ -217,6 +238,20 @@ never becomes a post. `targets` is a JSONB list of `Destination` text forms,
 `ix_review_log_at` is what `/freigabe`'s "Verlauf" section (`recent(limit=30)`,
 newest first) queries against.
 
+### Queue timestamps (migration `0008`)
+
+```sql
+deliveries    + queued_at   -- when queue_for_review(now) ran
+post_drafts   + submitted_at -- when submit_for_review(targets, now) ran
+review_log    + queued_at   -- copied from whichever of the above applies; None for AUTO
+```
+
+All three nullable: the Freigabe page's reaction-time and inbox-zero lines
+(`domain/stats.py`) need to know when something *entered* the queue, and
+`review_log` (migration `0007`) only ever recorded when it *left* (`at`).
+Nothing older than this migration claims to know a queued/submitted time it
+never recorded.
+
 ### Calendar schema (4 more tables, migration `0004`)
 
 ```sql
@@ -251,28 +286,36 @@ src/diffus/
   shared/                        # what every bounded context uses; contexts never import each other
     config.py                    # pydantic-settings, env-only; read by the composition root and alembic
     dates.py                     # MONTHS/WEEKDAYS — the one shared/ module calendar/application may import
-    automation.py                # JobRun/JobStatus/Automation/RUN_HISTORY — context-neutral shape of
-                                  #   "what runs on a timer", for /einstellungen; a value-only module,
-                                  #   so application layers may import it the same way they import dates.py
+    automation.py                # JobRun/JobStatus/Automation/RUN_HISTORY/Streak — context-neutral
+                                  #   shape of "what runs on a timer", for /einstellungen; a value-only
+                                  #   module, so application layers may import it like dates.py; Streak
+                                  #   (round 7) tracks consecutive error-free runs, in memory like `runs`
     db/base.py                   # `Base(DeclarativeBase)`; every context's models inherit from it
     db/session.py                # engine / session factory construction
     scheduler.py                 # start_scheduler(): one AsyncIOScheduler interval job; next_run_time()
                                   #   reads the interval job's own next fire time, for /einstellungen
     presentation/
       auth.py                    # HTTP Basic auth dependency, applied to every route
-      display.py                 # German date/time/text formatting; re-exports shared/dates.py
+      display.py                 # German date/time/text formatting; re-exports shared/dates.py;
+                                  #   round 7: format_duration, greeting, EMPTY_LINES/empty_line,
+                                  #   MILESTONES/milestone, day_start/count_since, Heatmap/heatmap,
+                                  #   streak_line — every context-neutral "fun layer" helper
       templates.py                # build_templates(): Jinja2Templates + shared filters + assets global
       assets.py                  # load_assets(): resolves web/'s build manifest into asset() URLs
       templates/base.html         # the shell (sidebar / top bar + bottom tabs), <dialog id="modal">, asset() links
       static/dist/                # npm run build's output (gitignored); FastAPI serves it at /static
   crossposting/                  # first bounded context — poll a source, fan out, show what happened
     domain/                      # entities, value objects, ports, errors — stdlib only
+      stats.py                    #   ReviewStats/review_stats (round 7) — the Freigabe page's
+                                   #   reaction-time/inbox-zero numbers, from review_log alone
     application/                 # use cases; depend only on domain
       sync_posts.py               #   poll → upsert + previews → claim/queue_for_review → DeliverPost;
                                    #   also logs one AUTO review_log entry per post (round 5)
       deliver.py                  #   DeliverPost: sink registry lookup, deliver, record, commit
       sync_job.py                 #   SyncJob: refresh token, then sync, under one lock; LastRun (+ a short
-                                   #   `runs` history, round 5) for the UI
+                                   #   `runs` history, round 5, and a Streak, round 7) for the UI
+      activity.py                  #   GetActivity (round 7): total post count + posted_at_since — the
+                                   #   index page's heatmap and "Post Nummer N" milestone
       resend_delivery.py, refresh_token.py, connect_instagram.py
       overview.py, post_detail.py, preview.py     # read side
       drafts.py                   #   CreateDraft, SubmitDraft, ApproveDraft, RejectDraft, GetDraft,
@@ -283,7 +326,8 @@ src/diffus/
       channels.py                 #   GetChannels, SetAutoPublish, all_auto() — the Freigabe on/off switches
       review.py                   #   GetReviewQueue, CountReview, GetReviewHistory, ApprovePostDeliveries,
                                    #   RejectPostDeliveries — the Freigabe page's read, approve/reject and
-                                   #   Verlauf (round 5) side
+                                   #   Verlauf (round 5) side; GetReviewStats (round 7) wraps
+                                   #   review_log.decisions() + domain/stats.py::review_stats
       draft_media.py               #   DraftMediaGateway: a draft's own bytes as a MediaGateway for Telegram
     infrastructure/
       db/                         # models (Base from shared, incl. ReviewLogRow), repositories (session-bound,
@@ -299,13 +343,18 @@ src/diffus/
                                     #   cases and, for `.link()`, its LinkEventPost command
     presentation/
       services.py                 # typed Services dataclass handed to routes via Depends; carries
-                                   #   `automation: Automation` (round 5) alongside every use case
+                                   #   `automation: Automation` (round 5), `tz`, `activity: GetActivity`
+                                   #   and `review_stats: GetReviewStats` (round 7)
       routes.py, display.py                         # context-specific filters + routes; the whole
                                                       #   3-step wizard lives here now (GET/POST /neu,
                                                       #   /posts/new, /posts/new/{draft}), plus Freigabe
                                                       #   and GET /einstellungen (round 5, replaces
                                                       #   /freigabe/setup — job_status()/sync_summary()/
-                                                      #   outcome_line() live in display.py)
+                                                      #   outcome_line() live in display.py); round 7 adds
+                                                      #   GET /backdrop (display.backdrop_url — the
+                                                      #   newest post's stored cover, fetched by htmx from
+                                                      #   base.html on every page of every context) and
+                                                      #   display.inbox_zero_line()/reaction_line()
       templates/                                     # index.html, post.html, review.html (+ its Verlauf
                                                       #   section, round 5), settings.html (round 5, replaces
                                                       #   setup.html), compose.html, compose_preview.html,
@@ -352,7 +401,8 @@ src/diffus/
       templates/                   # calendar.html, event.html, link.html — the event form moved to
                                     #   crossposting/presentation/templates/wizard_event.html (round 4)
 alembic/                          # 0001 initial, 0002 previews, 0003 destinations and sources, 0004 calendar,
-                                   #   0005 drafts and scopes, 0006 Freigabe and channels, 0007 review log
+                                   #   0005 drafts and scopes, 0006 Freigabe and channels, 0007 review log,
+                                   #   0008 queue timestamps
 ```
 
 ## Conventions

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from contextlib import AbstractAsyncContextManager
+from datetime import datetime
 from types import TracebackType
 from typing import Protocol, Self
 
@@ -70,6 +71,14 @@ class PostRepository(Protocol):
     async def count(self) -> int: ...
 
     async def list_recent(self, limit: int = 20) -> list[Post]: ...
+
+    async def posted_at_since(self, since: datetime) -> list[datetime]:
+        """posted_at of every post posted at or after `since`, any order.
+
+        The activity heatmap and the "Post Nummer N" milestone line bucket
+        these by local day in presentation — see shared/presentation/display.py.
+        """
+        ...
 
 
 class DeliveryRepository(Protocol):
@@ -185,6 +194,14 @@ class ReviewLogRepository(Protocol):
 
     async def recent(self, limit: int = 30) -> list[ReviewLogEntry]:
         """Newest first."""
+        ...
+
+    async def decisions(self) -> list[ReviewLogEntry]:
+        """Every human decision (APPROVED or REJECTED, never AUTO), oldest first.
+
+        The whole history — what the Freigabe stats (domain/stats.py) are
+        computed from.
+        """
         ...
 
 

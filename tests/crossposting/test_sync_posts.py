@@ -444,7 +444,7 @@ async def test_the_fake_delivery_repositorys_claim_refuses_a_review_row():
     """Mirrors what the SQL repository test asserts against Postgres (§6a)."""
     uow = FakeUnitOfWork(channels=FakeChannels({DEFAULT_DESTINATIONS[0]: True}))
     delivery = Delivery(post_id="p1", destination=DEFAULT_DESTINATIONS[0])
-    delivery.queue_for_review()
+    delivery.queue_for_review(datetime.now(UTC))
     await uow.deliveries.save(delivery)
     await uow.commit()
 

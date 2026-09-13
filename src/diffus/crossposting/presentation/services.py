@@ -9,10 +9,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from zoneinfo import ZoneInfo
 
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
 
+from diffus.crossposting.application.activity import GetActivity
 from diffus.crossposting.application.channels import GetChannels, SetAutoPublish
 from diffus.crossposting.application.connect_instagram import ConnectInstagram
 from diffus.crossposting.application.drafts import (
@@ -34,6 +36,7 @@ from diffus.crossposting.application.review import (
     CountReview,
     GetReviewHistory,
     GetReviewQueue,
+    GetReviewStats,
     RejectPostDeliveries,
 )
 from diffus.crossposting.application.sync_job import SyncJob
@@ -69,6 +72,9 @@ class Services:
     reject_draft: RejectDraft
     events: EventDirectory
     automation: Automation
+    tz: ZoneInfo
+    activity: GetActivity
+    review_stats: GetReviewStats
 
 
 def get_services(request: Request) -> Services:

@@ -23,6 +23,7 @@
     <p class="body status">Läuft. Zuletzt {{ job.last.at|ago(now) }}.</p>
     <p class="meta">{{ job.last.summary }}</p>
     {% endif %}
+    {% set streak = job.streak|streak_line %}{% if streak %}<p class="meta">{{ streak }}</p>{% endif %}
     <form method="post" action="{{ job.sync_action }}">
       <input type="hidden" name="next" value="/einstellungen">
       <button type="submit" class="btn">Jetzt abgleichen</button>

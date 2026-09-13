@@ -9,9 +9,12 @@ and existing callers/tests keep working unchanged.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from diffus.shared.automation import Streak
 from diffus.shared.dates import MONTHS, WEEKDAYS
 from diffus.shared.redact import redact
 
@@ -22,9 +25,21 @@ __all__ = [
     "format_when",
     "format_ago",
     "format_until",
+    "format_duration",
     "summary",
     "redact",
     "error_text",
+    "streak_line",
+    "greeting",
+    "EMPTY_LINES",
+    "empty_line",
+    "MILESTONES",
+    "milestone",
+    "day_start",
+    "count_since",
+    "HeatmapDay",
+    "Heatmap",
+    "heatmap",
 ]
 
 
@@ -82,6 +97,32 @@ def format_until(dt: datetime, now: datetime) -> str:
     return "in 1 Tag" if days == 1 else f"in {days} Tagen"
 
 
+def format_duration(td: timedelta, dative: bool = False) -> str:
+    """'unter einer Minute', '1 Minute'/'N Minuten', '2 h'/'2 h 10 min', '3 Tage'/dative '3 Tagen'.
+
+    Unlike format_ago/format_until (a point in time relative to now), this
+    formats a duration itself — the Freigabe reaction time ("Entschieden
+    nach {duration}") and record ("Rekord: {duration}"). `dative` only ever
+    changes the days branch's plural ("Tage" -> "Tagen"): every other branch
+    already reads the same in both cases, the same way format_ago says
+    "vor 1 Tag" rather than "vor einem Tag".
+    """
+    seconds = max(td.total_seconds(), 0)
+    if seconds < 60:
+        return "unter einer Minute"
+    minutes = int(seconds // 60)
+    if minutes < 60:
+        return "1 Minute" if minutes == 1 else f"{minutes} Minuten"
+    hours = minutes // 60
+    if hours < 24:
+        rest = minutes % 60
+        return f"{hours} h {rest} min" if rest else f"{hours} h"
+    days = hours // 24
+    if days == 1:
+        return "1 Tag"
+    return f"{days} Tagen" if dative else f"{days} Tage"
+
+
 def summary(text: str | None, limit: int = 90) -> str:
     """First non-empty line of a caption, cut to `limit` characters."""
     if not text:
@@ -95,3 +136,129 @@ def summary(text: str | None, limit: int = 90) -> str:
 def error_text(text: str | None, limit: int = 160) -> str:
     """An error message safe to put on the page: secrets stripped, one line, short."""
     return summary(redact(text or ""), limit)
+
+
+def streak_line(streak: Streak) -> str | None:
+    """The settings page's per-job streak line, or None when there's nothing to say yet."""
+    if streak.current > 0:
+        run_word = "Lauf" if streak.current == 1 else "Läufe"
+        line = f"Serie: {streak.current} {run_word} ohne Fehler."
+        if streak.best > streak.current:
+            line += f" Rekord: {streak.best}."
+        return line
+    if streak.broken_at:
+        return f"Serie gerissen bei {streak.broken_at}."
+    return None
+
+
+def greeting(now: datetime, tz: ZoneInfo) -> str | None:
+    """A one-off kicker line on the index page, or None outside its two windows."""
+    hour = now.astimezone(tz).hour
+    if 5 <= hour <= 9:
+        return "Guten Morgen."
+    if hour == 23 or hour <= 4:
+        return "Nachtschicht?"
+    return None
+
+
+# Dry one-liners for an empty Freigabe queue — picked by day of year (empty_line)
+# so the same day always shows the same line rather than reshuffling on every
+# request, without needing anywhere to store which lines were shown already.
+EMPTY_LINES: tuple[str, ...] = (
+    "Geh raus, es ist schön draußen.",
+    "Die Warteschlange macht Pause.",
+    "Kein Post wartet. Du auch nicht.",
+    "Alles draußen, nichts drin.",
+    "Nichts liegt an. Das ist auch eine Nachricht.",
+    "Die Freigabe hat Feierabend.",
+    "Hier könnte dein Post warten. Tut er aber nicht.",
+    "Stille im Postfach.",
+    "Zeit für einen Kaffee.",
+    "Heute nichts zu entscheiden. Genieß es.",
+    "Alles freigegeben. Alles gut.",
+    "Leer. Schön leer.",
+)
+
+
+def empty_line(now: datetime, tz: ZoneInfo) -> str:
+    """One of EMPTY_LINES, stable for the whole local day."""
+    day_of_year = now.astimezone(tz).timetuple().tm_yday
+    return EMPTY_LINES[day_of_year % len(EMPTY_LINES)]
+
+
+# Round numbers worth calling out on the index/Freigabe "Post Nummer N" line.
+MILESTONES: tuple[int, ...] = (10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000)
+
+
+def milestone(total: int, today: int) -> int | None:
+    """The milestone crossed today, or None: the largest M with total - today < M <= total."""
+    if today == 0:
+        return None
+    reached = [m for m in MILESTONES if total - today < m <= total]
+    return max(reached) if reached else None
+
+
+def day_start(now: datetime, tz: ZoneInfo) -> datetime:
+    """Local midnight of `now`'s local day, as an aware UTC datetime."""
+    local_midnight = now.astimezone(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    return local_midnight.astimezone(UTC)
+
+
+def count_since(stamps: Iterable[datetime], since: datetime) -> int:
+    return sum(1 for stamp in stamps if stamp >= since)
+
+
+@dataclass(frozen=True, slots=True)
+class HeatmapDay:
+    day: date
+    count: int
+    level: int  # 0 none, 1, 2, 3 = three or more
+    future: bool  # after today (rendered invisible)
+    label: str  # "12. August", with the year appended outside the current year — never "Heute"
+
+
+@dataclass(frozen=True, slots=True)
+class Heatmap:
+    weeks: tuple[tuple[HeatmapDay, ...], ...]  # 16 columns oldest first, each Monday..Sunday
+    total: int  # posts inside the window
+    busiest: int  # most posts on one day
+
+
+def heatmap(stamps: Iterable[datetime], now: datetime, tz: ZoneInfo, weeks: int = 16) -> Heatmap:
+    """The index page's activity heatmap: `weeks` local Mon-Sun weeks ending with this one.
+
+    Only `stamps` that fall on a local day inside the window count towards
+    `total`/`busiest`/each day's `count` — a caller may hand in a slightly
+    wider range (GetActivity's own cutoff has some slack) without it leaking
+    into what the grid reports.
+    """
+    today = now.astimezone(tz).date()
+    week_end = today + timedelta(days=6 - today.weekday())  # Sunday of today's week
+    week_start = week_end - timedelta(days=7 * weeks - 1)  # Monday, `weeks` weeks back
+
+    counts: dict[date, int] = {}
+    for stamp in stamps:
+        day = stamp.astimezone(tz).date()
+        if week_start <= day <= week_end:
+            counts[day] = counts.get(day, 0) + 1
+
+    days: list[HeatmapDay] = []
+    day = week_start
+    while day <= week_end:
+        count = counts.get(day, 0)
+        label = f"{day.day}. {MONTHS[day.month - 1]}"
+        if day.year != today.year:
+            label += f" {day.year}"
+        days.append(
+            HeatmapDay(day=day, count=count, level=min(count, 3), future=day > today, label=label)
+        )
+        day += timedelta(days=1)
+
+    grid: tuple[tuple[HeatmapDay, ...], ...] = tuple(
+        tuple(days[i : i + 7]) for i in range(0, len(days), 7)
+    )
+    return Heatmap(
+        weeks=grid,
+        total=sum(d.count for d in days),
+        busiest=max((d.count for d in days), default=0),
+    )

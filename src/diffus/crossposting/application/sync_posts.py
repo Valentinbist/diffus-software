@@ -105,7 +105,7 @@ class SyncPosts:
                 # once, when the delivery was first created, not on every
                 # retry (§6a).
                 if delivery.status == DeliveryStatus.PENDING and not auto.get(destination, False):
-                    delivery.queue_for_review()
+                    delivery.queue_for_review(datetime.now(UTC))
                     async with self.uow() as uow:
                         await uow.deliveries.save(delivery)
                         await uow.commit()

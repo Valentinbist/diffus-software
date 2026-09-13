@@ -6,13 +6,15 @@
 {% block content %}
 <p class="meta kicker">Was noch nicht draußen ist</p>
 <h1 class="h1">Freigabe</h1>
+{% if milestone %}<p class="meta attention">Das war Freigabe Nummer {{ milestone }}.</p>{% endif %}
 
 {% if error %}
 <div class="notice"><p class="body">{{ error }}</p></div>
 {% endif %}
 
 {% if not queue.drafts and not queue.posts %}
-<p class="meta foot">Nichts wartet auf Freigabe.</p>
+<p class="meta foot">Nichts wartet auf Freigabe. {{ now|empty_line }}</p>
+{% if inbox_zero %}<p class="meta">{{ inbox_zero }}</p>{% endif %}
 {% endif %}
 
 {% if queue.drafts %}
@@ -106,6 +108,7 @@
 
 <section class="details">
   <p class="eyebrow">Verlauf</p>
+  {% if reaction %}<p class="meta">{{ reaction }}</p>{% endif %}
   {% for e in history %}
   <div class="log">
     <p class="body">{% if e.post_id %}<a class="plain" href="/posts/{{ e.post_id }}" data-modal>{{ e.summary or "Ohne Text" }}</a>{% else %}{{ e.summary or "Ohne Text" }}{% endif %}</p>

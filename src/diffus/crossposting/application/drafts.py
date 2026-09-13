@@ -55,9 +55,16 @@ async def _log_draft_outcome(
     async with uow() as u:
         draft = await u.drafts.get(draft_id)
         caption = draft.caption if draft is not None else None
+        queued_at = draft.submitted_at if draft is not None else None
         await u.review_log.add(
             ReviewLogEntry.new(
-                "draft", outcome, caption, targets.as_destinations(), datetime.now(UTC), post.id
+                "draft",
+                outcome,
+                caption,
+                targets.as_destinations(),
+                datetime.now(UTC),
+                post.id,
+                queued_at=queued_at,
             )
         )
         await u.commit()
@@ -179,7 +186,7 @@ class SubmitDraft:
             await _log_draft_outcome(self.uow, draft_id, ReviewOutcome.AUTO, targets, post)
             return SubmitResult(post=post, queued=False)
 
-        draft.submit_for_review(targets)
+        draft.submit_for_review(targets, datetime.now(UTC))
         async with self.uow() as uow:
             await uow.drafts.update(draft)
             await uow.commit()
@@ -213,7 +220,12 @@ class RejectDraft:
                 return
             await uow.review_log.add(
                 ReviewLogEntry.new(
-                    "draft", ReviewOutcome.REJECTED, draft.caption, (), datetime.now(UTC)
+                    "draft",
+                    ReviewOutcome.REJECTED,
+                    draft.caption,
+                    (),
+                    datetime.now(UTC),
+                    queued_at=draft.submitted_at,
                 )
             )
             await uow.drafts.delete(draft_id)

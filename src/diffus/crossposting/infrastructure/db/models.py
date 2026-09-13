@@ -2,7 +2,8 @@
 
 Mirrors alembic/versions/0001_initial.py, 0002_previews.py,
 0003_destinations_and_sources.py, 0005_drafts_and_scopes.py,
-0006_freigabe_and_channels.py and 0007_review_log.py exactly.
+0006_freigabe_and_channels.py, 0007_review_log.py and
+0008_queue_timestamps.py exactly.
 """
 
 from __future__ import annotations
@@ -80,7 +81,9 @@ class DeliveryRow(Base):
 
     Mirrors alembic/versions/0003_destinations_and_sources.py; the status
     index is 0006_freigabe_and_channels.py (the Freigabe queue and its nav
-    badge filter by status on every request).
+    badge filter by status on every request). `queued_at`
+    (0008_queue_timestamps.py) is when queue_for_review() put it in REVIEW —
+    the Freigabe stats' reaction time (domain/stats.py).
     """
 
     __tablename__ = "deliveries"
@@ -95,6 +98,7 @@ class DeliveryRow(Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class PostDraftRow(Base):
@@ -122,6 +126,9 @@ class PostDraftRow(Base):
     # and "calendar:<event id>" for a draft started from an event.
     targets: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     event_ref: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # When submit_for_review() queued this draft (0008_queue_timestamps.py);
+    # None for a draft published all-auto or never submitted.
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class PostDraftMediaRow(Base):
@@ -160,7 +167,9 @@ class ReviewLogRow(Base):
     Mirrors alembic/versions/0007_review_log.py. `post_id` has no foreign
     key, same reasoning as `post_drafts.post_id`: a rejected draft never
     becomes a post, so the column has to tolerate "never was one", not just
-    "not yet".
+    "not yet". `queued_at` (0008_queue_timestamps.py) is when the logged
+    thing entered the Freigabe queue — None for AUTO entries (never queued)
+    and for rows written before this column existed.
     """
 
     __tablename__ = "review_log"
@@ -174,3 +183,4 @@ class ReviewLogRow(Base):
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     # List of Destination text forms ("telegram:-100…"), () for a rejected draft.
     targets: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
