@@ -576,6 +576,15 @@ def test_base_layout_has_the_sidebar_brand_and_modal_dialog():
     assert 'href="/static/dist/' in html
 
 
+def test_base_layout_declares_the_installable_app():
+    html = render_index(Overview(token=None, posts=[]))
+
+    assert '<link rel="manifest" href="/static/dist/manifest.webmanifest">' in html
+    assert '<meta name="theme-color" content="#020202">' in html
+    assert '<link rel="apple-touch-icon" href="/static/dist/icons/apple-touch-icon.png">' in html
+    assert '<link rel="icon" href="/static/dist/icons/favicon.png" type="image/png">' in html
+
+
 def test_thumb_and_title_links_open_in_the_modal():
     view = PostView(post=make_post(), deliveries=[])
 

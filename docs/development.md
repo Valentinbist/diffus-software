@@ -213,3 +213,12 @@ has foreign keys.
 - **The `dev` image is uid/gid 1000.** On Linux, pass
   `--build-arg UID=$(id -u) --build-arg GID=$(id -g)` if yours differs, so the
   bind mounts stay writable.
+- **The service worker caches `/static/` in your browser.** Hashed files
+  under `/static/dist/assets/` are cache-first (safe: a rebuild renames them);
+  the manifest, icons and `offline.html` are network-first, so an edit shows
+  on the next load — except the copy of `offline.html` the worker precaches
+  for offline use, which refreshes only with a new worker, i.e. per
+  `npm run build` or per start of the `web` service (`__BUILD_ID__` is fixed
+  for one `vite build --watch`). Pages are never cached. While working on
+  `sw.ts`, tick "Update on reload" under DevTools → Application → Service
+  Workers, or unregister it there.

@@ -416,6 +416,41 @@ async def test_static_files_are_served_without_auth(settings_env):
     assert resp.status_code == 404
 
 
+async def test_service_worker_is_served_from_the_root_without_auth(
+    settings_env, monkeypatch, tmp_path
+):
+    # A worker only controls URLs at or below its own path: it has to come
+    # from /sw.js, not /static/dist/sw.js, to see any page at all.
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "sw.js").write_text('self.addEventListener("fetch", () => {});')
+    monkeypatch.setattr("diffus.app.STATIC_DIR", tmp_path)
+    services = make_services(await make_uow(), FakeSink(), FakeMedia())
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/sw.js")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/javascript")
+    assert resp.headers["cache-control"] == "no-cache"
+    assert 'addEventListener("fetch"' in resp.text
+
+
+async def test_service_worker_404s_on_an_unbuilt_checkout(settings_env, monkeypatch, tmp_path):
+    monkeypatch.setattr("diffus.app.STATIC_DIR", tmp_path)
+    services = make_services(await make_uow(), FakeSink(), FakeMedia())
+    app = create_app(services=services)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/sw.js")
+
+    assert resp.status_code == 404
+
+
 async def make_uow_with_draft() -> tuple[FakeUnitOfWork, PostDraft]:
     uow = await make_uow()
     draft = PostDraft.new(

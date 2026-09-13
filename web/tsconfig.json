@@ -8,5 +8,6 @@
     "types": ["vite/client"],
     "noEmit": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/sw.ts"]
 }

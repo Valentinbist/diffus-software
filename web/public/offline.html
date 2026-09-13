@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Offline – diffus.space</title>
+  <!-- What the service worker (src/sw.ts) shows when a page can't be
+       fetched. Self-contained on purpose — the only page with its own CSS:
+       the hashed stylesheet may not be cached yet, and Google Fonts are
+       certainly out of reach, so this repeats the few tokens it needs from
+       styles.css with the same font stacks' system fallbacks. -->
+  <style>
+    html { color-scheme: dark; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #020202;
+      color: #ffffff;
+      font: 16px/1.7 'Fira Sans', Helvetica, Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    main { box-sizing: border-box; max-width: 620px; padding: 40px 25px; }
+    .meta { margin: 0; font-size: 14px; color: #4C4C4C; }
+    h1 { margin: 6px 0 12px; font: 400 28px/1.3 'Playfair Display', Georgia, Times, serif; }
+    p { margin: 0; }
+    .again { margin-top: 14px; }
+    a { color: #ffffff; text-decoration: underline; text-underline-offset: 0.18em; }
+    a:hover, a:focus { color: #4C4C4C; }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="meta">diffus.space</p>
+    <h1>Gerade offline.</h1>
+    <p>Die Posts, die Freigabe und der Kalender leben auf dem Server. Sobald du wieder Verbindung hast, geht es hier weiter.</p>
+    <p class="meta again"><a href="">Nochmal versuchen</a></p>
+  </main>
+</body>
+</html>

@@ -45,6 +45,12 @@ context.
    verbinden** to complete the OAuth flow. The UI is in German, like the
    diffus.space site it belongs to, and has a **Kalender** page alongside
    the Social Posts page when `KALENDER_DIGITAL_TOKEN` is set.
+4. On a phone, pick **Zum Home-Bildschirm** / **App installieren** from the
+   browser menu: the site is an installable web app (manifest, icons and a
+   service worker), so it opens in its own window with an icon, and a failed
+   page load shows a German offline page instead of the browser's. Nothing
+   else is cached — every page still comes from the server, behind Basic
+   auth, so expect the password prompt once after the browser has restarted.
 
 The first sync after connecting only marks existing posts as seen — it never
 blasts your entire history into Telegram. New posts found on later polls are

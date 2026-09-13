@@ -79,7 +79,8 @@ cd web && npm run check && npm run build                    # frontend: Vite + T
 - Alembic migrations (`alembic/`) are one history for all contexts and run on
   container start.
 - The frontend is a separate build; `uv run` never touches it. All CSS lives in
-  `web/src/styles.css`; templates reference built files through `asset()`.
+  `web/src/styles.css` (one exception: the self-contained offline page
+  `web/public/offline.html`); templates reference built files through `asset()`.
 
 **Running the stack has real side effects.** Against the real services, approving in
 Freigabe sends to the actual Telegram chat, publishing with Instagram ticked posts

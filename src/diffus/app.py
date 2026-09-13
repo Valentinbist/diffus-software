@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import APIRouter, FastAPI, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from diffus.calendar.application.calendar_events import GetCalendarEvents
@@ -87,13 +87,32 @@ STATIC_DIR = Path(__file__).parent / "shared" / "presentation" / "static"
 
 # Unauthenticated on purpose: container and uptime probes can't carry Basic auth
 # credentials, and neither can Instagram fetching a draft's images at publish
-# time — see draft_public_media below.
+# time — see draft_public_media below. The service worker is public for the
+# same reason /static is: built JS is not sensitive.
 public_router = APIRouter()
 
 
 @public_router.get("/healthz")
 async def healthz():
     return {"status": "ok"}
+
+
+@public_router.get("/sw.js")
+async def service_worker():
+    """The service worker web/src/sw.ts builds — from the site root, not from /static.
+
+    A worker only controls URLs at or below its own path, so served as
+    /static/dist/sw.js it could never see a page; from here its scope is the whole
+    site. A checkout without `npm run build` 404s, and main.ts's registration
+    just logs a warning. no-cache keeps the browser's own update check honest
+    behind a caching proxy.
+    """
+    path = STATIC_DIR / "dist" / "sw.js"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="no service worker built")
+    return FileResponse(
+        path, media_type="text/javascript", headers={"Cache-Control": "no-cache"}
+    )
 
 
 @public_router.get("/media/drafts/{draft_id}/{index}")

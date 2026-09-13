@@ -26,6 +26,7 @@ wired today; the model no longer assumes it.
 | Wizard entry (round 4, entry point simplified round 5) | **One** three-step flow — Termin → Post → Vorschau — at `/neu` → `/posts/new` → its preview, each of the first two steps skippable, behind one entry point everywhere: the shell's own cta button (sidebar on desktop, top bar on phones) ("Neues Event erstellen" / "Neuer Post"), replacing round 4's own "+ Neu" nav link and every in-page "Neu" button; the event step writes through `EventDirectory.create_event` rather than the calendar owning its own form | Replaces two separate flows ("Termin anlegen" / "Post erstellen") that did the same two things in a different order; owner: "one wizard, one modal", then round 5: "the neu button should be in the header" |
 | Freigabe history | append-only `review_log`, one row per human decision or auto-publish | the queue only shows what is still open; the owner wants to see what happened |
 | Fun layer (round 7) | Freigabe reaction-time/inbox-zero stats computed from `review_log` via `queued_at` (`domain/stats.py::review_stats`, in-memory, no new table); per-job streaks (`shared/automation.py::Streak`) kept in memory like `runs`, reset on restart; the index heatmap and "Post Nummer N" milestone read straight from `posts` (`posted_at_since`); the site-wide blurred backdrop is served by its own route, `GET /backdrop` | make the site fun without a bigger data model: everything here is derived from data already stored, or is deliberately ephemeral (streaks) |
+| Installable (PWA) | a web app manifest + icons (`web/public/`), the head tags in `base.html`, and a service worker (`web/src/sw.ts`, served at `/sw.js` by `app.py`'s public router) that caches **only `/static/`** — hashed files cache-first, the rest network-first — and answers a *failed* `GET` page load with the static German offline page `web/public/offline.html`; **pages are never cached** (they sit behind Basic auth) and nothing outside `/static/` is intercepted | the reviewers open this on their phones: a home-screen icon, its own window and a real offline page make it feel like an app without a second UI — and the cache rule is main.ts's "never snapshot a Basic-auth page" rule, applied to the worker too |
 
 ## Domain model
 
@@ -278,11 +279,19 @@ index/post-page "Termine" section now look events up by a list of post ids.
 web/                              # Vite + TypeScript + htmx (npm dep, not a CDN); builds into
                                    #   src/diffus/shared/presentation/static/dist with a manifest
   package.json, vite.config.ts, tsconfig.json
-  src/main.ts                     # htmx config + the ≥ 900px modal wiring (progressive enhancement)
+  tsconfig.sw.json                # type-checks sw.ts against the WebWorker lib (it can't share a
+                                   #   program with the DOM lib, so `npm run check` runs tsc twice)
+  src/main.ts                     # htmx config + the ≥ 900px modal wiring (progressive enhancement);
+                                   #   registers /sw.js
+  src/sw.ts                       # the service worker — second Vite entry, emitted unhashed as dist/sw.js
   src/styles.css                  # every rule the templates use; no inline CSS in base.html
+  brand/logo-white.png            # the diffus.space logo, white on transparent, as the site serves it
+  public/                         # copied into dist/ as is: manifest.webmanifest, icons/ (the logo on the
+                                   #   page black, composed by scripts/make-icons.py), offline.html — the one
+                                   #   page with its own CSS, since it must render with nothing else cached
 src/diffus/
   app.py                         # composition root: lifespan builds the graph, starts the scheduler;
-                                  # also defines public_router (/healthz, /media/drafts/...)
+                                  # also defines public_router (/healthz, /sw.js, /media/drafts/...)
   shared/                        # what every bounded context uses; contexts never import each other
     config.py                    # pydantic-settings, env-only; read by the composition root and alembic
     dates.py                     # MONTHS/WEEKDAYS — the one shared/ module calendar/application may import
@@ -580,3 +589,15 @@ instead, behind the normal Basic auth.
   `DraftMediaGateway`, i.e. the draft's own stored bytes, not a re-download:
   the draft is what makes that resend possible at all once Instagram was
   never involved.
+- **The installable app is still behind Basic auth.** The manifest, icons,
+  offline page and `/sw.js` are public like the rest of `/static/`, but
+  `start_url` (`/`) is not: an installed app's window shares the browser's
+  credential cache, which browsers empty on exit, so the first open after a
+  restart prompts for the password again (a saved password autofills it).
+  The worker never widens that: it stores nothing a page returned, and only
+  a `GET` navigation that *fails* (no network) gets the offline page.
+  Updates ride the build: `__BUILD_ID__` (vite.config.ts) changes per
+  `npm run build`, and the new worker's `activate` deletes the previous
+  build's cache — so an edit to `offline.html` reaches phones with the next
+  deploy, not before; in the dev stack it changes per start of the `web`
+  service, not per save (see development.md, Gotchas).

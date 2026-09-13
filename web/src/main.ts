@@ -101,3 +101,14 @@ function setupDiffusMode(): void {
 
 setupModal();
 setupDiffusMode();
+
+// Installable app: the service worker (sw.ts — served at /sw.js so its scope
+// is the whole site) caches the built files and answers a failed page load
+// with the offline page. Best effort: browsers only expose the API on a
+// secure context (https, or localhost), and every page works the same
+// without it.
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker
+    .register("/sw.js", { type: "module" })
+    .catch((err: unknown) => console.warn("service worker not registered:", err));
+}
