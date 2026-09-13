@@ -130,7 +130,7 @@
       // What CI runs, minus the frontend build.
       "label": "Checks: ruff + ty + pytest",
       "type": "shell",
-      "command": "uv run ruff check . && uv run ty check && uv run pytest -q",
+      "command": "uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest -q",
       "detail": "lint, type-check and test on the host (no containers involved)",
       "group": { "kind": "test", "isDefault": true },
       "problemMatcher": [],

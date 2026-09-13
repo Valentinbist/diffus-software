@@ -65,9 +65,7 @@ class PreviewRow(Base):
 
     __tablename__ = "previews"
 
-    post_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("posts.id"), primary_key=True
-    )
+    post_id: Mapped[str] = mapped_column(String(64), ForeignKey("posts.id"), primary_key=True)
     media_index: Mapped[int] = mapped_column(Integer, primary_key=True)
     content_type: Mapped[str] = mapped_column(String(64), nullable=False)
     data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
@@ -89,9 +87,7 @@ class DeliveryRow(Base):
     __tablename__ = "deliveries"
     __table_args__ = (Index("ix_deliveries_status", "status"),)
 
-    post_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("posts.id"), primary_key=True
-    )
+    post_id: Mapped[str] = mapped_column(String(64), ForeignKey("posts.id"), primary_key=True)
     sink: Mapped[str] = mapped_column(String(32), primary_key=True)
     address: Mapped[str] = mapped_column(String(64), primary_key=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False)

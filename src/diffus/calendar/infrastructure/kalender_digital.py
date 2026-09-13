@@ -45,9 +45,7 @@ class KalenderDigitalClient:
         self.time_zone = time_zone
 
     async def fetch(self, start: date, end: date) -> CalendarSnapshot:
-        resp = await self.http.get(
-            f"{self.api_base}/calendar", params={"capabilityId": self.token}
-        )
+        resp = await self.http.get(f"{self.api_base}/calendar", params={"capabilityId": self.token})
         resp.raise_for_status()
         payload = resp.json()
         # The source's own zone, not the UI's display timezone: whole-day

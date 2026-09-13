@@ -233,9 +233,7 @@ def render_compose(
 
 
 def make_draft(caption: str = "Hallo") -> PostDraft:
-    return PostDraft.new(
-        caption=caption, images=[DraftImage("image/jpeg", 1, 1, b"x")], now=NOW
-    )
+    return PostDraft.new(caption=caption, images=[DraftImage("image/jpeg", 1, 1, b"x")], now=NOW)
 
 
 def render_compose_preview(
@@ -401,8 +399,7 @@ def test_index_row_shows_the_instagram_origin_line_linking_to_the_permalink():
     html = render_index(connected(PostView(post=make_post(), deliveries=[])))
 
     assert (
-        'href="https://instagram.com/p/p1/" target="_blank" rel="noopener">Instagram ✓</a>'
-        in html
+        'href="https://instagram.com/p/p1/" target="_blank" rel="noopener">Instagram ✓</a>' in html
     )
 
 
@@ -679,7 +676,7 @@ def test_post_detail_termine_section_and_link_button_only_when_calendar_enabled(
 def test_social_posts_h1_without_a_kicker():
     html = render_index(Overview(token=None, posts=[]))
 
-    assert "<h1 class=\"h1\">Social Posts</h1>" in html
+    assert '<h1 class="h1">Social Posts</h1>' in html
     assert "Instagram · Telegram · App" not in html  # round 6: the owner asked for it to go
 
 
@@ -929,9 +926,7 @@ def test_settings_job_shows_the_streak_line():
     )
     with_streak = render_settings(
         Overview(token=None, posts=[]),
-        jobs=(
-            make_job_status(runs=(JobRun(at=NOW),), streak=Streak(current=37, best=120)),
-        ),
+        jobs=(make_job_status(runs=(JobRun(at=NOW),), streak=Streak(current=37, best=120)),),
     )
 
     assert "Serie:" not in without_streak  # default JobStatus() carries an empty Streak
@@ -939,9 +934,7 @@ def test_settings_job_shows_the_streak_line():
 
 
 def test_settings_next_run_shows_relative_time_only_when_known():
-    with_next = render_settings(
-        Overview(token=None, posts=[]), next_run=NOW + timedelta(minutes=4)
-    )
+    with_next = render_settings(Overview(token=None, posts=[]), next_run=NOW + timedelta(minutes=4))
     without_next = render_settings(Overview(token=None, posts=[]), next_run=None)
 
     assert "Nächster Lauf in 4 Minuten" in with_next
@@ -1098,8 +1091,7 @@ def test_review_page_post_block_shows_the_instagram_origin_line_under_the_captio
     html = render_review(ReviewQueue(drafts=[], posts=[review]))
 
     assert (
-        'href="https://instagram.com/p/p1/" target="_blank" rel="noopener">Instagram ✓</a>'
-        in html
+        'href="https://instagram.com/p/p1/" target="_blank" rel="noopener">Instagram ✓</a>' in html
     )
 
 
@@ -1145,9 +1137,7 @@ def test_review_page_history_rejected_entry_has_no_post_link():
 
 
 def test_review_page_history_auto_entry_says_automatisch_veroeffentlicht():
-    entry = ReviewLogEntry.new(
-        "post", ReviewOutcome.AUTO, "Auto-Post", (C1,), NOW, post_id="p2"
-    )
+    entry = ReviewLogEntry.new("post", ReviewOutcome.AUTO, "Auto-Post", (C1,), NOW, post_id="p2")
 
     html = render_review(ReviewQueue(drafts=[], posts=[]), history=(entry,))
 

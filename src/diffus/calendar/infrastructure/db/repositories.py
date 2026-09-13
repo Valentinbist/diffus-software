@@ -78,9 +78,7 @@ class SqlSubCalendarRepository:
     async def save_all(self, sub_calendars: Sequence[SubCalendar]) -> None:
         if not sub_calendars:
             return
-        stmt = pg_insert(SubCalendarRow).values(
-            [_sub_calendar_to_row(sc) for sc in sub_calendars]
-        )
+        stmt = pg_insert(SubCalendarRow).values([_sub_calendar_to_row(sc) for sc in sub_calendars])
         stmt = stmt.on_conflict_do_update(
             index_elements=[SubCalendarRow.id],
             set_={
@@ -193,9 +191,7 @@ class SqlEventRepository:
     async def get_many(self, ids: Sequence[str]) -> dict[str, CalendarEvent]:
         if not ids:
             return {}
-        rows = (
-            (await self._s.execute(select(EventRow).where(EventRow.id.in_(ids)))).scalars().all()
-        )
+        rows = (await self._s.execute(select(EventRow).where(EventRow.id.in_(ids)))).scalars().all()
         grouped = await self._sub_calendar_ids([row.id for row in rows])
         return {row.id: _row_to_event(row, grouped.get(row.id, frozenset())) for row in rows}
 

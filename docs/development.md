@@ -178,11 +178,28 @@ curl -s -G "https://graph.instagram.com/v21.0/<ig-user-id>/content_publishing_li
 ## Checks
 
 ```sh
-uv run ruff check . && uv run ty check && uv run pytest -q
+uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest -q
 cd web && npm run check && npm run build
 ```
 
-That is what CI runs. The suite uses in-memory fakes — no database, no
+That is what CI runs — the `check` job in `.github/workflows/ci-cd.yml`, on
+every push to `main` and every pull request; `build` and `deploy` follow only
+on `main`. The Python checks also run as a git hook, through [prek](https://github.com/j178/prek):
+
+```sh
+uv run prek install    # once per clone
+```
+
+From then on every commit runs `ruff check --fix` and `ruff format` on the
+staged Python files and `ty check` on the whole project. The ruff hooks fix
+and format in place; when one changes a file the commit stops so you can
+look at the change and re-stage, and the second attempt goes through.
+Everything runs via `uv run`, so the versions are the ones in `uv.lock` and
+the hook cannot disagree with CI. `uv run prek run -a` runs the hooks over
+everything, `git commit --no-verify` skips them once. The config is
+`.pre-commit-config.yaml`; plain pre-commit reads the same file.
+
+The suite uses in-memory fakes — no database, no
 network — except for `tests/crossposting/test_sql_repositories.py`, which is
 skipped unless `TEST_DATABASE_URL` is set. To run those against a real
 Postgres (the dev one is not published on the host, so this runs inside the

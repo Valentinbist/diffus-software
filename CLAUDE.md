@@ -66,11 +66,14 @@ When a change touches a decision, an entity, the schema or the layout, update
 ## Working in the repo
 
 ```sh
-uv run ruff check . && uv run ty check && uv run pytest -q   # what CI runs
-cd web && npm run check && npm run build                    # frontend: Vite + TypeScript + htmx
+uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest -q
+cd web && npm run check && npm run build   # frontend: Vite + TypeScript + htmx; CI runs both lines
 ```
 
 - Python 3.14 via `uv`; ruff, line length 100; `ty` for types.
+- `uv run prek install` once per clone: every commit then runs `ruff check --fix`,
+  `ruff format` and `ty check` through the same `uv run` commands
+  (`.pre-commit-config.yaml`). A hook that changes a file stops the commit; re-stage.
 - Tests use in-memory fakes — no database, no network — so green tests do not prove
   the SQL. The Postgres-backed suite is gated by `TEST_DATABASE_URL`; see
   `docs/development.md` for running it inside compose.

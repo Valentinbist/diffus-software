@@ -153,9 +153,10 @@ Python 3.14 + [uv](https://docs.astral.sh/uv/), plus a separate frontend build
 
 ```sh
 uv sync                            # .venv + everything, dev tools included
+uv run prek install                # ruff (fix + format) and ty as a git hook on every commit
 cd web && npm ci && npm run build  # the frontend; `uv run` never touches it
 
-uv run ruff check . && uv run ty check && uv run pytest -q
+uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest -q
 ```
 
 Or entirely in Docker — `docker-compose.yml` builds the `dev` stage and

@@ -1,0 +1,31 @@
+# Git hooks: ruff and ty on every commit, the same checks the CI `check` job runs.
+#
+#   uv run prek install    # once per clone
+#   uv run prek run -a     # over everything, not just the staged files
+#
+# The ruff hooks fix and format in place. When one changes a file the commit
+# stops so you can review and re-stage; the second attempt goes through.
+# Everything goes through `uv run`, so the ruff and ty versions are the ones
+# pinned in uv.lock and the hooks cannot drift from CI. Plain pre-commit reads
+# this file as well.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check --fix
+        entry: uv run ruff check --fix --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+      - id: ty
+        name: ty check
+        entry: uv run ty check
+        language: system
+        types_or: [python, pyi, toml]
+        pass_filenames: false

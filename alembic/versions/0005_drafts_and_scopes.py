@@ -77,9 +77,7 @@ def upgrade() -> None:
         sa.Column("data", sa.LargeBinary(), nullable=False),
     )
 
-    op.create_index(
-        "ix_calendar_event_posts_post_id", "calendar_event_posts", ["post_id"]
-    )
+    op.create_index("ix_calendar_event_posts_post_id", "calendar_event_posts", ["post_id"])
 
 
 def downgrade() -> None:

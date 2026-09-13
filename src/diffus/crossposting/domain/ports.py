@@ -40,9 +40,7 @@ class PostSource(Protocol):
 
 
 class PostSink(Protocol):
-    async def deliver(
-        self, post: Post, address: str, media: Sequence[MediaFile]
-    ) -> None: ...
+    async def deliver(self, post: Post, address: str, media: Sequence[MediaFile]) -> None: ...
 
 
 class MediaGateway(Protocol):

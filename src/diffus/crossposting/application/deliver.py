@@ -48,9 +48,7 @@ class DeliverPost:
                 await sink.deliver(post, delivery.destination.address, media)
                 delivery.record_sent(datetime.now(UTC))
             except Exception as exc:  # noqa: BLE001 - a failed delivery must never abort the caller
-                logger.exception(
-                    "failed to deliver post %s to %s", post.id, delivery.destination
-                )
+                logger.exception("failed to deliver post %s to %s", post.id, delivery.destination)
                 delivery.record_failure(str(exc))
 
         async with self.uow() as uow:

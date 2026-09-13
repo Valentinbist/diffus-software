@@ -272,9 +272,7 @@ class InstagramClient:
         )
         posts = self._parse({"data": [payload]})
         if not posts:
-            raise PublishError(
-                "Instagram: Der veröffentlichte Post konnte nicht gelesen werden."
-            )
+            raise PublishError("Instagram: Der veröffentlichte Post konnte nicht gelesen werden.")
         return posts[0]
 
     async def _request(

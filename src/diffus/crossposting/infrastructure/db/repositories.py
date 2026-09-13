@@ -85,9 +85,7 @@ def _row_to_post(row: PostRow) -> Post:
         permalink=row.permalink,
         media=tuple(
             # .get(): rows written before thumbnails were stored have no such key.
-            MediaItem(
-                url=m["url"], type=MediaType(m["type"]), thumbnail_url=m.get("thumbnail_url")
-            )
+            MediaItem(url=m["url"], type=MediaType(m["type"]), thumbnail_url=m.get("thumbnail_url"))
             for m in row.media
         ),
         posted_at=row.posted_at,
@@ -204,9 +202,7 @@ class SqlPostRepository:
         return [_row_to_post(row) for row in result.scalars().all()]
 
     async def posted_at_since(self, since: datetime) -> list[datetime]:
-        result = await self._s.execute(
-            select(PostRow.posted_at).where(PostRow.posted_at >= since)
-        )
+        result = await self._s.execute(select(PostRow.posted_at).where(PostRow.posted_at >= since))
         return list(result.scalars().all())
 
 
@@ -247,9 +243,7 @@ class SqlDeliveryRepository:
     async def for_posts(self, post_ids: Sequence[str]) -> dict[str, list[Delivery]]:
         if not post_ids:
             return {}
-        result = await self._s.execute(
-            select(DeliveryRow).where(DeliveryRow.post_id.in_(post_ids))
-        )
+        result = await self._s.execute(select(DeliveryRow).where(DeliveryRow.post_id.in_(post_ids)))
         grouped: dict[str, list[Delivery]] = {}
         for row in result.scalars().all():
             grouped.setdefault(row.post_id, []).append(_row_to_delivery(row))
@@ -481,8 +475,6 @@ class SqlReviewLogRepository:
     async def decisions(self) -> list[ReviewLogEntry]:
         outcomes = [ReviewOutcome.APPROVED.value, ReviewOutcome.REJECTED.value]
         result = await self._s.execute(
-            select(ReviewLogRow)
-            .where(ReviewLogRow.outcome.in_(outcomes))
-            .order_by(ReviewLogRow.at)
+            select(ReviewLogRow).where(ReviewLogRow.outcome.in_(outcomes)).order_by(ReviewLogRow.at)
         )
         return [_row_to_review_log_entry(row) for row in result.scalars().all()]

@@ -258,7 +258,8 @@ async def test_reject_post_deliveries_on_an_unknown_post_does_nothing():
 async def test_get_review_history_returns_newest_first():
     uow = await make_uow_with_review_post(destinations=(TELEGRAM,))
     await ApprovePostDeliveries(
-        uow=uow, deliver=DeliverPost(media=FakeMedia(), sinks={"telegram": FakeSink()}, uow=uow),
+        uow=uow,
+        deliver=DeliverPost(media=FakeMedia(), sinks={"telegram": FakeSink()}, uow=uow),
         destinations=[TELEGRAM],
     ).run("p1", [TELEGRAM])
 
@@ -290,9 +291,7 @@ async def test_get_review_stats_reads_decisions_and_computes_stats():
 
 
 async def test_get_review_stats_is_empty_with_no_decisions():
-    stats = await GetReviewStats(uow=FakeUnitOfWork()).run(
-        datetime(2024, 1, 1, tzinfo=UTC)
-    )
+    stats = await GetReviewStats(uow=FakeUnitOfWork()).run(datetime(2024, 1, 1, tzinfo=UTC))
 
     assert stats.decisions == 0
     assert stats.empty_since is None

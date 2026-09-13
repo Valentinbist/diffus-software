@@ -34,8 +34,6 @@ class ResendDelivery:
         matches = [d for d in existing.get(post_id, []) if d.destination == destination]
         if matches and matches[0].status == DeliveryStatus.REVIEW:
             raise ConnectorError("Wartet auf Freigabe.")
-        delivery = (
-            matches[0] if matches else Delivery(post_id=post_id, destination=destination)
-        )
+        delivery = matches[0] if matches else Delivery(post_id=post_id, destination=destination)
 
         return await self.deliver.run(post, delivery)

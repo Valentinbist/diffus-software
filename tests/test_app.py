@@ -202,7 +202,10 @@ def make_services(
         get_draft=GetDraft(uow=uow),
         draft_image=GetDraftImage(uow=uow),
         channels=GetChannels(
-            uow=uow, source="instagram", destinations=destinations, public_base_url="https://example.com"
+            uow=uow,
+            source="instagram",
+            destinations=destinations,
+            public_base_url="https://example.com",
         ),
         set_auto_publish=SetAutoPublish(uow=uow, channels=[INSTAGRAM_CHANNEL, *destinations]),
         submit_draft=SubmitDraft(uow=uow, publish=publish_draft, destinations=destinations),
@@ -471,9 +474,7 @@ async def test_public_draft_media_route_serves_the_image_only_with_the_right_key
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.get(
-            f"/media/drafts/{draft.id}/0", params={"key": draft.public_key}
-        )
+        resp = await client.get(f"/media/drafts/{draft.id}/0", params={"key": draft.public_key})
         assert resp.status_code == 200
         assert resp.content == b"draft-bytes"
         assert resp.headers["cache-control"] == "public, max-age=86400"
@@ -625,9 +626,7 @@ async def test_compose_wizard_queues_for_freigabe_then_approval_delivers_via_tel
         assert resp.status_code == 200
         assert '<span class="badge">1</span>' in resp.text
 
-        resp = await client.post(
-            f"/freigabe/drafts/{draft_id}/approve", data={"telegram": "c1"}
-        )
+        resp = await client.post(f"/freigabe/drafts/{draft_id}/approve", data={"telegram": "c1"})
         assert resp.status_code == 303
         post_id = f"diffus:{draft_id}"
         assert resp.headers["location"] == f"/posts/{post_id}"

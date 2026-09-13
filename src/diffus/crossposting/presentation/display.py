@@ -57,6 +57,7 @@ def filter_by_source(views: Sequence[PostView], mode: str) -> list[PostView]:
         return [v for v in views if v.post.source == mode]
     return list(views)
 
+
 # What a delivery row says after the sink/target label. The mockups use ✓ / ✕ and plain words.
 STATUS_TEXT = {
     DeliveryStatus.SENT: "✓",

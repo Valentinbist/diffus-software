@@ -110,9 +110,7 @@ async def service_worker():
     path = STATIC_DIR / "dist" / "sw.js"
     if not path.is_file():
         raise HTTPException(status_code=404, detail="no service worker built")
-    return FileResponse(
-        path, media_type="text/javascript", headers={"Cache-Control": "no-cache"}
-    )
+    return FileResponse(path, media_type="text/javascript", headers={"Cache-Control": "no-cache"})
 
 
 @public_router.get("/media/drafts/{draft_id}/{index}")

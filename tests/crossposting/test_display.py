@@ -181,9 +181,7 @@ def test_instagram_hint_covers_all_four_states():
 
 
 def make_post_with_source(source: str, permalink: str = "https://instagram.com/p/p1/") -> Post:
-    return Post(
-        id="p1", source=source, caption=None, permalink=permalink, media=(), posted_at=NOW
-    )
+    return Post(id="p1", source=source, caption=None, permalink=permalink, media=(), posted_at=NOW)
 
 
 def test_channel_lines_for_an_instagram_post_starts_with_the_origin_line():

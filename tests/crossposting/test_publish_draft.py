@@ -225,9 +225,7 @@ async def test_instagram_with_a_token_missing_the_publish_scope_is_refused():
 
 async def test_instagram_without_a_public_https_base_url_is_refused():
     draft = make_draft()
-    publish, _, _ = await seed(
-        draft, token=make_token(), public_base_url="http://localhost:8000"
-    )
+    publish, _, _ = await seed(draft, token=make_token(), public_base_url="http://localhost:8000")
 
     with pytest.raises(DraftError, match="https"):
         await publish.run(draft.id, PublishTargets(instagram=True, destinations=()))

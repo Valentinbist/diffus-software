@@ -81,9 +81,7 @@ class TelegramSink:
         for attempt in range(1, MAX_RETRIES + 1):
             files = make_files()
             try:
-                resp = await self.http.post(
-                    url, data=data, files=files, timeout=REQUEST_TIMEOUT
-                )
+                resp = await self.http.post(url, data=data, files=files, timeout=REQUEST_TIMEOUT)
             finally:
                 for _field, (_filename, fh) in files.items():
                     fh.close()

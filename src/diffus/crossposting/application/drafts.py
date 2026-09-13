@@ -97,9 +97,7 @@ class CreateDraft:
 
         # normalise() is CPU-bound (Pillow decode/crop/encode); off the event
         # loop so one big upload doesn't stall every other request.
-        normalised = [
-            await asyncio.to_thread(self.images.normalise, data) for _, data in uploads
-        ]
+        normalised = [await asyncio.to_thread(self.images.normalise, data) for _, data in uploads]
 
         draft = PostDraft.new(
             caption=caption,

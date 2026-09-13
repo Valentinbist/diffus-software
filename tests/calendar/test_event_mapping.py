@@ -74,6 +74,4 @@ def test_row_to_link_maps_every_field():
     linked_at = datetime(2026, 9, 3, 9, 0, tzinfo=UTC)
     row = EventPostRow(event_id="3571355485", post_id="p1", linked_at=linked_at)
 
-    assert _row_to_link(row) == EventLink(
-        event_id="3571355485", post_id="p1", linked_at=linked_at
-    )
+    assert _row_to_link(row) == EventLink(event_id="3571355485", post_id="p1", linked_at=linked_at)

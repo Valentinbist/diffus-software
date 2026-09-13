@@ -177,9 +177,7 @@ def test_month_view_renders_a_35_cell_grid_with_a_delivered_event_marked():
 
 
 def event_context(**overrides) -> dict:
-    event = make_event(
-        who="Jona", description="Kommt vorbei!", title="<script>alert(1)</script>"
-    )
+    event = make_event(who="Jona", description="Kommt vorbei!", title="<script>alert(1)</script>")
     view = make_view(
         event,
         status=EventPostStatus.DELIVERED,
@@ -234,9 +232,7 @@ def test_nav_shows_the_calendar_link_marked_current_on_a_calendar_page():
 
 def test_the_capability_token_never_leaks_into_rendered_html():
     error = f"boom capabilityId={TOKEN}"
-    agenda_html = render_calendar(
-        agenda_context(last_run=CalendarLastRun(at=NOW, error=error))
-    )
+    agenda_html = render_calendar(agenda_context(last_run=CalendarLastRun(at=NOW, error=error)))
     event_html = render_event(event_context())
 
     assert TOKEN not in agenda_html
@@ -260,9 +256,7 @@ def test_status_pills_mark_the_current_filter_and_link_to_the_others():
     html = render_calendar(agenda_context(status="linked"))
 
     assert '<span class="pill current">Mit Post</span>' in html
-    assert (
-        'href="/calendar?view=agenda&from=2026-09-03&amp;cal=5298948&status=unlinked"' in html
-    )
+    assert 'href="/calendar?view=agenda&from=2026-09-03&amp;cal=5298948&status=unlinked"' in html
     assert 'href="/calendar?view=agenda&from=2026-09-03&amp;cal=5298948">Alle</a>' in html
 
 
@@ -291,9 +285,7 @@ def make_link_picker() -> LinkPicker:
             )
         ],
         events=[
-            LinkPickerEvent(
-                event=upcoming, sub_calendars=[SUB_CALENDAR], reasons=(), linked=True
-            )
+            LinkPickerEvent(event=upcoming, sub_calendars=[SUB_CALENDAR], reasons=(), linked=True)
         ],
     )
 

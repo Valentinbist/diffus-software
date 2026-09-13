@@ -42,9 +42,7 @@ def load_assets(static_dir: Path | None = None) -> Assets:
 
     manifest_path = _manifest_path(static_dir)
     if not manifest_path.exists():
-        logger.warning(
-            "no asset manifest at %s; run `npm run build` in web/", manifest_path
-        )
+        logger.warning("no asset manifest at %s; run `npm run build` in web/", manifest_path)
         return Assets(js=_FALLBACK_JS, css=_FALLBACK_CSS)
 
     manifest = json.loads(manifest_path.read_text())

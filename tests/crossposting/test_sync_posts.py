@@ -368,9 +368,7 @@ async def test_one_channel_auto_and_the_other_not_sends_one_and_queues_the_other
     deliver = DeliverPost(
         media=media, sinks={"telegram": telegram_sink, "signal": signal_sink}, uow=uow
     )
-    sync = SyncPosts(
-        source=source, media=media, deliver=deliver, destinations=[c1, c2], uow=uow
-    )
+    sync = SyncPosts(source=source, media=media, deliver=deliver, destinations=[c1, c2], uow=uow)
 
     await sync.run()
     source.posts = [bootstrap_post, new_post]

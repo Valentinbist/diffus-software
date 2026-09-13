@@ -423,10 +423,9 @@ class Token:
     scopes: str = ""
 
     def needs_refresh(self, now: datetime) -> bool:
-        return (
-            now - self.refreshed_at >= timedelta(days=self.REFRESH_AFTER_DAYS)
-            or self.expires_at - now <= timedelta(days=self.REFRESH_WITHIN_EXPIRY_DAYS)
-        )
+        return now - self.refreshed_at >= timedelta(
+            days=self.REFRESH_AFTER_DAYS
+        ) or self.expires_at - now <= timedelta(days=self.REFRESH_WITHIN_EXPIRY_DAYS)
 
     @property
     def can_publish(self) -> bool:

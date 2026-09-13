@@ -139,9 +139,7 @@ class PublishDraft:
                 )
 
     async def _publish_to_instagram(self, draft: PostDraft, token: Token) -> Post:
-        urls = [
-            draft.public_media_url(self.public_base_url, i) for i in range(len(draft.images))
-        ]
+        urls = [draft.public_media_url(self.public_base_url, i) for i in range(len(draft.images))]
         try:
             media_id = await self.publisher.publish_images(token, urls, draft.caption)
             post = await self.publisher.fetch_post(token, media_id)

@@ -87,9 +87,7 @@ async def test_a_failing_image_processor_propagates_the_error_and_writes_nothing
 async def test_event_ref_is_stored_on_the_draft():
     create, uow = make_create()
 
-    draft = await create.run(
-        "Hallo", [("a.jpg", b"one")], now=NOW, event_ref="calendar:e1"
-    )
+    draft = await create.run("Hallo", [("a.jpg", b"one")], now=NOW, event_ref="calendar:e1")
 
     assert draft.event_ref == "calendar:e1"
     stored = await uow.drafts.get(draft.id)

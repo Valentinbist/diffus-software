@@ -172,9 +172,7 @@ async def test_the_post_picker_never_shows_the_same_post_twice():
     linked_post = make_post(
         "p-linked", datetime(2026, 9, 1, tzinfo=UTC), caption="Siebdruck Workshop"
     )
-    suggested_post = make_post(
-        "p-suggested", datetime(2026, 9, 2, tzinfo=UTC), caption="Siebdruck"
-    )
+    suggested_post = make_post("p-suggested", datetime(2026, 9, 2, tzinfo=UTC), caption="Siebdruck")
     plain_post = make_post("p-plain", datetime(2026, 1, 1, tzinfo=UTC), caption="Nichts")
     posts = FakePostCatalog([linked_post, suggested_post, plain_post])
     links = FakeEventLinks()
