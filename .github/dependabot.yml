@@ -1,0 +1,74 @@
+# Dependabot: weekly dependency updates, grouped so one PR per ecosystem lands on
+# Monday instead of a flood of single-package PRs. Patch and minor bumps are
+# grouped; major bumps stay as separate PRs so they get their own review.
+version: 2
+updates:
+  # Python: pyproject.toml + uv.lock (runtime deps and the dev group).
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
+    groups:
+      python-minor-and-patch:
+        update-types: [minor, patch]
+
+  # Frontend: web/package.json + package-lock.json (Vite, TypeScript, htmx).
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+
+  # GitHub Actions used in .github/workflows/ci-cd.yml.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Base images in the Dockerfile (uv, node, python) and docker-compose.yml
+  # (node, postgres). Major bumps of python/node/postgres are pinned choices,
+  # so they are ignored here and changed by hand.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
+    groups:
+      docker-images:
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: python
+        update-types: ["version-update:semver-major"]
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
+      - dependency-name: postgres
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
+    ignore:
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
+      - dependency-name: postgres
+        update-types: ["version-update:semver-major"]
