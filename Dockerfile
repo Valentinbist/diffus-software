@@ -10,7 +10,7 @@
 #
 # Bump the two pins together with .tool-versions / .python-version.
 
-FROM ghcr.io/astral-sh/uv:0.11.33 AS uv
+FROM ghcr.io/astral-sh/uv:0.12.13 AS uv
 
 FROM node:22-alpine AS web
 WORKDIR /build/web
