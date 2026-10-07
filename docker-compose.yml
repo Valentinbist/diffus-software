@@ -1,6 +1,6 @@
 # Dev stack: builds the `dev` target and runs uvicorn --reload against the
-# bind-mounted sources. The production stack lives in infra/compose/ and uses
-# the `runtime` image from GHCR.
+# bind-mounted sources. Production runs on Coolify (see "Deployment" in readme.md) from
+# the `runtime` image CI pushes to GHCR.
 #
 #   docker compose up --build        # plain: edits under src/ hot-reload
 #   docker compose up --watch        # + rebuild on pyproject.toml/uv.lock,
@@ -71,7 +71,7 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # TLS: put Caddy or a tunnel (Tailscale/cloudflared) in front of :8000.
+  # TLS: in production Coolify's proxy terminates it; locally use a tunnel (scripts/dev-tunnel.sh).
   # Required anyway — basic auth is cleartext without it, and the Instagram
   # OAuth redirect URI must be public HTTPS.
 

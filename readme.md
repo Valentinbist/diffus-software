@@ -195,76 +195,104 @@ template, the scheduler bootstrap. See
 
 ## Deployment
 
-One VPS running Docker. Host config is an Ansible playbook; app deploys are a
-GitHub Actions pipeline. Neither requires you to edit anything over SSH — if you
-want to change the host, change [`infra/ansible/playbook.yml`](infra/ansible/playbook.yml)
-and re-run it.
+[Coolify](https://coolify.io) on one server. GitHub Actions tests the code and
+builds the image; Coolify runs it, terminates TLS and backs up the database.
 
 ```text
-infra/ansible/    host config: docker, deploy user, ufw, sshd hardening, nightly pg_dump
-infra/compose/    the production stack that runs on the box: app + postgres + caddy
-.github/workflows/ci-cd.yml   check -> build -> deploy
+.github/workflows/ci-cd.yml   check -> build (image to GHCR) -> deploy (via the Coolify API)
+scripts/coolify-deploy.sh     the deploy step: set image tag, deploy, wait for the result
 ```
 
-Strato has no public API or Terraform provider, so the box itself is created
-once by hand in their panel. Everything after that is declarative.
+Two Coolify resources, both in one project and on the same server:
+
+- **PostgreSQL**: a Coolify-managed database, so it gets Coolify's scheduled
+  backups (Backups tab, optionally to S3).
+- **The app**: an application with the *Docker Image* build pack, pulling
+  `ghcr.io/valentinbist/diffus-software`. CI sets the tag to the commit SHA on
+  every deploy, so Coolify always shows which commit is running.
 
 ### One-time setup
 
-1. **Order the VPS** (Debian), and point an A record for your domain at it.
-2. **Configure the host.** Copy `infra/ansible/inventory.example.ini` to
-   `inventory.ini`, fill in the hostname and the public keys — *your* key and
-   the CI deploy key, because the playbook disables password auth:
+1. **Server and Coolify.** A server with Coolify installed (its
+   `curl … | bash` installer sets up Docker as well), and an A record for the
+   app's domain pointing at it. Under *Settings → Advanced*, turn on **API Access**.
+2. **Image access.** GHCR packages start out private, even for a public repo.
+   Either make `diffus-software` public (GitHub → Packages → Package settings),
+   or run `docker login ghcr.io` on the server once with a token that has
+   `read:packages`.
+3. **Database.** *+ New → Database → PostgreSQL 17*, then start it. Copy its
+   **internal** Postgres URL and change the scheme to `postgresql+asyncpg://`.
+   That is `DATABASE_URL`. Leave "Make it publicly available" off. Add a
+   backup schedule on the Backups tab.
+4. **App.** *+ New → Docker Image*, image `ghcr.io/valentinbist/diffus-software`,
+   tag `latest` for the first start. Then set:
 
-   ```sh
-   cd infra/ansible
-   ansible-galaxy collection install -r requirements.yml
-   ansible-playbook playbook.yml          # first run: ansible_user=root
-   ```
+   | Setting | Value |
+   | --- | --- |
+   | Domain | `https://<your domain>` (port 8000 is the exposed port) |
+   | Health check | enabled, path `/healthz`, port `8000`, start period `60`s |
+   | Environment | everything in `.env.example`, with `DATABASE_URL` from step 3, `PUBLIC_BASE_URL=https://<your domain>` and `IG_REDIRECT_URI=https://<your domain>/oauth/callback` |
 
-   Then switch `ansible_user` to `deploy` in the inventory for all later runs.
-3. **Add the GitHub secrets** below (Settings → Secrets → Actions).
+   Leave the mocks overrides (`*_API_BASE`, `INSTAGRAM_*`, `PUBLISH_ALLOW_HTTP`)
+   unset, so they keep their real defaults. Turn off any automatic deploy on
+   push: CI triggers deploys after the checks pass. The app UUID is in its URL
+   in Coolify.
+5. **API token.** *Keys & Tokens → API tokens*, with `deploy` and `write`
+   permissions (setting the image tag is a write).
+6. **GitHub secrets** (Settings → Secrets → Actions, environment `production`):
 
-### GitHub secrets
+   | Secret | What it is |
+   | --- | --- |
+   | `COOLIFY_URL` | Base URL of the Coolify dashboard, e.g. `https://coolify.example.org` |
+   | `COOLIFY_TOKEN` | The API token from step 5 |
+   | `COOLIFY_APP_UUID` | The app's UUID |
+   | `APP_DOMAIN` | The app's domain, without `https://`. Used only for the final `/healthz` check |
 
-| Secret | What it is |
-| --- | --- |
-| `DEPLOY_HOST` | Server IP or hostname |
-| `DEPLOY_SSH_KEY` | Private half of the CI deploy key |
-| `SSH_KNOWN_HOSTS` | `ssh-keyscan -t ed25519 <host>` output. Optional, but without it the first connection is trust-on-first-use |
-| `APP_DOMAIN` | FQDN Caddy issues a certificate for |
-| `POSTGRES_PASSWORD` | Database password |
-| `IG_APP_ID`, `IG_APP_SECRET`, `IG_REDIRECT_URI` | Instagram app credentials |
-| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_IDS` | Telegram bot and target chats |
-| `KALENDER_DIGITAL_TOKEN` | kalender.digital share-link token; leave the secret empty (or unset) to deploy without the calendar feature |
-| `BASIC_AUTH_USERNAME`, `BASIC_AUTH_PASSWORD` | UI credentials |
-| `PUBLIC_BASE_URL` | *Not its own secret* — the pipeline derives it as `https://${APP_DOMAIN}` and writes it to `.env` itself; nothing to add here |
+The app's own credentials (Instagram, Telegram, kalender.digital, Basic auth)
+live only in Coolify's environment tab, not in GitHub.
 
 ### Deploying
 
 Push to `main`, or run the workflow manually. The pipeline lints, type-checks
-and tests; builds the image and pushes it to GHCR tagged with the commit SHA;
-ships the compose files; writes `.env` on the host from the secrets above; then
-`docker compose pull && up -d`. It finally polls `/healthz` over HTTPS and fails
-the run if the new version isn't serving.
+and tests; builds the image and pushes it to GHCR tagged with the commit SHA
+(and `latest`); sets that tag on the Coolify app and triggers a deployment; and
+waits until Coolify reports it `finished`. Last, it polls `/healthz` over
+HTTPS and fails the run if the new version isn't serving.
 
-`.env` on the host is written *only* by the pipeline. Editing it in place means
-the next deploy silently reverts you.
+Coolify does a rolling update: it starts the new container (whose entrypoint
+runs `alembic upgrade head`), waits for its health check, then stops the old
+one. A failed health check leaves the old version serving.
+
+**Rollback:** deploy an earlier commit's tag, from Coolify (change the tag,
+Deploy) or from a laptop:
+
+```sh
+COOLIFY_URL=… COOLIFY_TOKEN=… COOLIFY_APP_UUID=… scripts/coolify-deploy.sh <commit sha>
+```
+
+That rolls back code, not schema: migrations are not downgraded. Keep
+migrations additive so the previous image still runs against the new schema.
 
 ### Operational notes
 
-- **TLS** is Caddy with automatic Let's Encrypt, which is what makes
-  `IG_REDIRECT_URI` a valid public HTTPS URL and stops Basic auth travelling in
-  cleartext.
-- **Postgres is never published to the host interface** — it is reachable only
-  over the compose network. This matters because Docker's iptables rules bypass
-  ufw, so a published port would be exposed regardless of the firewall.
+- **TLS** is Coolify's proxy (Traefik) with Let's Encrypt. That is what makes
+  `IG_REDIRECT_URI` a valid public HTTPS URL and stops Basic auth from
+  travelling in cleartext.
+- **Request timeouts:** Traefik v3 cuts off reading a request body after 60s
+  by default. If a large video upload from a slow phone connection fails,
+  raise `entryPoints.https.transport.respondingTimeouts.readTimeout` in
+  *Servers → Proxy*.
+- **Postgres is never public.** The app reaches it over Coolify's internal
+  Docker network; leave "Make it publicly available" off.
 - **Post images live in Postgres.** Instagram's CDN links expire, so each sync
   stores a copy of every still image in the `previews` table while the link is
   fresh, and the UI serves them from `/posts/<id>/media/<n>`. A few hundred KB
-  per image; it grows with the number of posts, not with time.
-- **Backups** are a nightly `pg_dump` to `/opt/connector/backups`, kept 14 days.
-  That covers a bad migration, not a lost server; ship them off-box if the data
-  matters to you.
+  per image; it grows with the number of posts, not with time. The app
+  container itself holds no state and needs no volume.
+- **Backups** are Coolify's scheduled `pg_dump`s of the database resource.
+  Without an S3 destination they stay on the same server, which covers a bad
+  migration, not a lost server.
 - **`--workers 1` is still load-bearing.** The poller runs inside the app
-  process, so a second worker means two pollers racing.
+  process, so a second worker means two pollers racing. The brief overlap
+  during a rolling update is harmless, because an interval job first fires one
+  interval after the process starts.
