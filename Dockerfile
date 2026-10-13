@@ -78,6 +78,10 @@ CMD ["uvicorn", "diffus.app:app", "--host", "0.0.0.0", "--port", "8000", \
 
 
 FROM base AS runtime
+# The commit sha (ci-cd.yml passes it), so Sentry tags each error with the
+# release that raised it. Empty in a local build.
+ARG GIT_SHA=""
+ENV SENTRY_RELEASE=${GIT_SHA}
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --chown=app:app alembic.ini ./
 COPY --chown=app:app alembic ./alembic

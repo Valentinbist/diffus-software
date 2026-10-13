@@ -74,9 +74,10 @@ from diffus.crossposting.presentation import display as crossposting_display
 from diffus.crossposting.presentation.routes import ServicesDep, build_templates, router
 from diffus.crossposting.presentation.services import Services
 from diffus.shared.automation import Automation, JobStatus
-from diffus.shared.config import get_settings
+from diffus.shared.config import SentrySettings, get_settings
 from diffus.shared.db.session import make_engine, make_session_factory
 from diffus.shared.scheduler import next_run_time, start_scheduler
+from diffus.shared.sentry import init_sentry
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -379,6 +380,9 @@ def create_app(
         app.state.services = services
         app.state.calendar = calendar
     else:
+        # Before the routers below: Sentry's FastAPI integration wraps each
+        # route as it is built, so starting it in the lifespan would be too late.
+        init_sentry(SentrySettings())
         app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
     app.include_router(public_router)
     app.include_router(router)

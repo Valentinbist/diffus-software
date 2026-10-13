@@ -1,8 +1,8 @@
 name: CI/CD
 
 # One click = push to main, or hit "Run workflow" on this file.
-# check runs on every PR; build and deploy only ever run on main, and only if
-# check passed, so a red test can't reach the box.
+# check and infra run on every PR; build and deploy only ever run on main, and only if
+# both passed, so a red test can't reach the box.
 
 on:
   push:
@@ -51,8 +51,32 @@ jobs:
       - name: Test
         run: uv run pytest -q
 
+  # Static checks of infra/terraform only: no credentials, no state. Nothing in
+  # CI ever runs plan or apply; infrastructure is applied by hand from a laptop
+  # (see "Deployment" in readme.md).
+  infra:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.9
+
+      - name: Format check
+        working-directory: infra/terraform
+        run: terraform fmt -check -recursive
+
+      - name: Init without backend
+        working-directory: infra/terraform
+        run: terraform init -backend=false
+
+      - name: Validate
+        working-directory: infra/terraform
+        run: terraform validate
+
   build:
-    needs: check
+    needs: [check, infra]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -82,6 +106,8 @@ jobs:
           context: .
           target: runtime
           push: true
+          build-args: |
+            GIT_SHA=${{ github.sha }}
           tags: |
             ${{ steps.meta.outputs.image }}
             ${{ steps.meta.outputs.repo }}:latest
@@ -108,6 +134,9 @@ jobs:
           COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
           COOLIFY_APP_UUID: ${{ secrets.COOLIFY_APP_UUID }}
+          # The dashboard is behind Cloudflare Access; this service token lets CI through.
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: scripts/coolify-deploy.sh "${{ github.sha }}"
 
       - name: Verify the deploy is actually serving

@@ -39,6 +39,19 @@ updates:
       actions:
         patterns: ["*"]
 
+  # Terraform providers in infra/terraform (.terraform.lock.hcl). Dependabot
+  # bumps the version constraints and the lock file together.
+  - package-ecosystem: terraform
+    directory: /infra/terraform
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
+    groups:
+      terraform-providers:
+        update-types: [minor, patch]
+
   # Base images in the Dockerfile (uv, node, python) and docker-compose.yml
   # (node, postgres). Major bumps of python/node/postgres are pinned choices,
   # so they are ignored here and changed by hand.

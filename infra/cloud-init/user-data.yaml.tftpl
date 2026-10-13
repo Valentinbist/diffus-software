@@ -1,0 +1,71 @@
+#cloud-config
+# First-boot setup of the Coolify VM. Rendered by infra/terraform/proxmox.tf.
+# Runs once: editing this later does nothing to the running VM.
+
+hostname: ${hostname}
+manage_etc_hosts: true
+timezone: Europe/Berlin
+
+users:
+  - name: ${admin_user}
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: true
+    ssh_authorized_keys:
+%{ for key in ssh_keys ~}
+      - ${key}
+%{ endfor ~}
+
+# The VM sits behind NAT and the tunnel, so nothing needs a firewall; what is
+# left is keeping SSH key-only.
+ssh_pwauth: false
+
+packages:
+  - qemu-guest-agent
+  - curl
+  - ca-certificates
+  - gnupg
+  - unattended-upgrades
+
+write_files:
+  # Coolify connects to its own host as root over SSH with a key its installer
+  # adds, so root login stays possible, but with keys only.
+  - path: /etc/ssh/sshd_config.d/99-hardening.conf
+    permissions: "0644"
+    content: |
+      PermitRootLogin prohibit-password
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+
+  # Security updates are on by default in Debian; this adds cloudflared's apt
+  # repo (Release Origin: cloudflared) so the tunnel client updates itself too.
+  - path: /etc/apt/apt.conf.d/52unattended-upgrades-cloudflared
+    permissions: "0644"
+    content: |
+      Unattended-Upgrade::Origins-Pattern {
+        "origin=cloudflared";
+      };
+
+  - path: /etc/apt/apt.conf.d/20auto-upgrades
+    permissions: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+
+runcmd:
+  - systemctl enable --now qemu-guest-agent
+  - systemctl restart ssh
+
+  # cloudflared runs on the host, outside Coolify on purpose: the dashboard
+  # and CI deploys stay reachable even if a Coolify deploy breaks.
+  - mkdir -p /usr/share/keyrings
+  - curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg
+  - echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" > /etc/apt/sources.list.d/cloudflared.list
+  - apt-get update
+  - apt-get install -y cloudflared
+  - cloudflared service install ${tunnel_token}
+
+  # The first visitor to http://<vm ip>:8000 becomes Coolify's admin, so
+  # register right after first boot, from the LAN.
+  - curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash

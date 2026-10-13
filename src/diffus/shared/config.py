@@ -85,3 +85,22 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+class SentrySettings(BaseSettings):
+    """Error reporting, read apart from `Settings` because it is read earlier.
+
+    Sentry has to start before `create_app` builds the routes (its FastAPI
+    integration patches route construction), i.e. at import time — where
+    `Settings` would fail without a .env. Every field here has a default, so
+    this never does. An empty DSN means Sentry is off.
+    """
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    sentry_dsn: str = ""
+    sentry_environment: str = "production"
+    # Baked into the runtime image as the commit sha (Dockerfile, ci-cd.yml).
+    sentry_release: str = ""
+    # 0 = errors only. Raising it also reports /healthz probes as transactions.
+    sentry_traces_sample_rate: float = 0.0

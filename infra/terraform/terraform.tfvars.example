@@ -1,0 +1,24 @@
+# Copy to terraform.tfvars (gitignored). Nothing in here is secret, but it is
+# specific to one installation.
+cloudflare_account_id = "<account id>"
+cloudflare_zone_id    = "<zone id of diffus.space>"
+app_hostname          = "connector.diffus.space"
+coolify_hostname      = "coolify.diffus.space"
+admin_emails          = ["you@example.org"]
+
+proxmox_node = "pve"
+vm_ssh_keys  = ["ssh-ed25519 AAAA... you@laptop"]
+
+# Optional, defaults shown.
+# vm_name            = "diffus"
+# vm_id              = null
+# vm_cores           = 2
+# vm_memory_mb       = 4096
+# vm_disk_gb         = 40
+# vm_datastore       = "local-lvm"
+# image_datastore    = "local"
+# snippets_datastore = "local"
+# vm_bridge          = "vmbr0"
+# vm_ipv4            = "192.168.1.50/24" # default "dhcp"
+# vm_gateway         = "192.168.1.1"
+# admin_user         = "diffus"

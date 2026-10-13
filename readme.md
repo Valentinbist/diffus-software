@@ -195,58 +195,105 @@ template, the scheduler bootstrap. See
 
 ## Deployment
 
-[Coolify](https://coolify.io) on one server. GitHub Actions tests the code and
-builds the image; Coolify runs it, terminates TLS and backs up the database.
+Production runs on a Proxmox box at home: one Debian VM (made by Terraform and
+cloud-init) running [Coolify](https://coolify.io), which runs the app and its
+Postgres. A Cloudflare Tunnel is the only way in, so nothing is open at home.
+GitHub Actions tests the code and builds the image; Coolify runs it and backs up
+the database.
 
 ```text
-.github/workflows/ci-cd.yml   check -> build (image to GHCR) -> deploy (via the Coolify API)
-scripts/coolify-deploy.sh     the deploy step: set image tag, deploy, wait for the result
+.github/workflows/ci-cd.yml        check + infra -> build (image to GHCR) -> deploy (via the Coolify API)
+scripts/coolify-deploy.sh          the deploy step: set image tag, deploy, wait for the result
+infra/terraform/                   Cloudflare (tunnel, DNS, Access, rulesets, R2 bucket) and the Proxmox VM
+infra/cloud-init/                  first-boot config of the VM: ssh, cloudflared, Coolify installer
 ```
 
 Two Coolify resources, both in one project and on the same server:
 
 - **PostgreSQL**: a Coolify-managed database, so it gets Coolify's scheduled
-  backups (Backups tab, optionally to S3).
+  backups (Backups tab, to S3).
 - **The app**: an application with the *Docker Image* build pack, pulling
   `ghcr.io/valentinbist/diffus-software`. CI sets the tag to the commit SHA on
   every deploy, so Coolify always shows which commit is running.
 
+The app is at `https://<app hostname>`. The Coolify dashboard is at
+`https://<coolify hostname>`, behind Cloudflare Access: only the admin emails
+pass (login by email code), plus CI with a service token.
+
 ### One-time setup
 
-1. **Server and Coolify.** A server with Coolify installed (its
-   `curl … | bash` installer sets up Docker as well), and an A record for the
-   app's domain pointing at it. Under *Settings → Advanced*, turn on **API Access**.
-2. **Image access.** GHCR packages start out private, even for a public repo.
+1. **Accounts and tokens.** Terraform is applied by hand from a laptop
+   (`terraform` 1.14, see `.tool-versions`); CI only checks its syntax.
+   - Cloudflare: create an R2 bucket for the Terraform state by hand (it
+     cannot hold its own state otherwise), an R2 API token for it, and an API
+     token for Terraform with: Account → Cloudflare Tunnel Edit, Access: Apps
+     and Policies Edit, Access: Service Tokens Edit, Workers R2 Storage Edit;
+     Zone → DNS Edit, Zone WAF Edit, Single Redirect Edit.
+   - Proxmox: an API token (*Datacenter → Permissions → API Tokens*) with rights
+     on the node and the datastores, content type **Snippets** and **Import**
+     enabled on the `local` datastore (*Datacenter → Storage*), and the laptop's
+     SSH key in root's `authorized_keys` on the node (the provider uploads the
+     cloud-init file over SSH).
+2. **Apply Terraform.**
+
+   ```sh
+   cd infra/terraform
+   cp backend.hcl.example backend.hcl            # bucket + R2 endpoint
+   cp terraform.tfvars.example terraform.tfvars  # hostnames, node, ssh keys, ...
+   export AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=…   # the R2 token for the state
+   export CLOUDFLARE_API_TOKEN=… PROXMOX_VE_ENDPOINT=… PROXMOX_VE_API_TOKEN=…
+   terraform init -backend-config=backend.hcl
+   terraform apply
+   ```
+
+   This creates the tunnel, DNS records, the Access application, the zone
+   rules, the backup bucket and the VM. The VM installs cloudflared and Coolify
+   on first boot; give it a few minutes.
+3. **First boot.** Open `http://<vm ip>:8000` (`terraform output vm_ipv4`) from
+   the LAN **immediately** and register: the first visitor becomes Coolify's
+   admin. Then *Settings*: set the instance domain to `http://<coolify hostname>`
+   and, under *Advanced*, turn on **API Access**.
+4. **Image access.** GHCR packages start out private, even for a public repo.
    Either make `diffus-software` public (GitHub → Packages → Package settings),
-   or run `docker login ghcr.io` on the server once with a token that has
+   or run `docker login ghcr.io` on the VM once with a token that has
    `read:packages`.
-3. **Database.** *+ New → Database → PostgreSQL 17*, then start it. Copy its
+5. **Database.** *+ New → Database → PostgreSQL 17*, then start it. Copy its
    **internal** Postgres URL and change the scheme to `postgresql+asyncpg://`.
-   That is `DATABASE_URL`. Leave "Make it publicly available" off. Add a
-   backup schedule on the Backups tab.
-4. **App.** *+ New → Docker Image*, image `ghcr.io/valentinbist/diffus-software`,
+   That is `DATABASE_URL`. Leave "Make it publicly available" off. For
+   backups, add an S3 destination (*Storages*): the R2 bucket from
+   `terraform output backup_bucket`, endpoint
+   `https://<account id>.r2.cloudflarestorage.com`, and an R2 API key made by
+   hand (*R2 → Manage API tokens*, read and write on that bucket). Then add a
+   schedule on the database's Backups tab.
+6. **App.** *+ New → Docker Image*, image `ghcr.io/valentinbist/diffus-software`,
    tag `latest` for the first start. Then set:
 
    | Setting | Value |
    | --- | --- |
-   | Domain | `https://<your domain>` (port 8000 is the exposed port) |
+   | Domain | `http://<app hostname>` (port 8000 is the exposed port) |
    | Health check | enabled, path `/healthz`, port `8000`, start period `60`s |
-   | Environment | everything in `.env.example`, with `DATABASE_URL` from step 3, `PUBLIC_BASE_URL=https://<your domain>` and `IG_REDIRECT_URI=https://<your domain>/oauth/callback` |
+   | Environment | everything in `.env.example`, with `DATABASE_URL` from step 5, `PUBLIC_BASE_URL=https://<app hostname>` and `IG_REDIRECT_URI=https://<app hostname>/oauth/callback` |
+
+   The domain is `http://` on purpose: Cloudflare terminates TLS, and with
+   `https://` Traefik would try to get its own certificate and redirect-loop
+   behind the tunnel. The URLs the app hands out stay `https`.
 
    Leave the mocks overrides (`*_API_BASE`, `INSTAGRAM_*`, `PUBLISH_ALLOW_HTTP`)
    unset, so they keep their real defaults. Turn off any automatic deploy on
    push: CI triggers deploys after the checks pass. The app UUID is in its URL
    in Coolify.
-5. **API token.** *Keys & Tokens → API tokens*, with `deploy` and `write`
+7. **API token.** *Keys & Tokens → API tokens*, with `deploy` and `write`
    permissions (setting the image tag is a write).
-6. **GitHub secrets** (Settings → Secrets → Actions, environment `production`):
+8. **GitHub secrets** (Settings → Secrets → Actions, environment `production`):
 
    | Secret | What it is |
    | --- | --- |
-   | `COOLIFY_URL` | Base URL of the Coolify dashboard, e.g. `https://coolify.example.org` |
-   | `COOLIFY_TOKEN` | The API token from step 5 |
+   | `COOLIFY_URL` | Base URL of the Coolify dashboard, `https://<coolify hostname>` |
+   | `COOLIFY_TOKEN` | The API token from step 7 |
    | `COOLIFY_APP_UUID` | The app's UUID |
-   | `APP_DOMAIN` | The app's domain, without `https://`. Used only for the final `/healthz` check |
+   | `CF_ACCESS_CLIENT_ID` | `terraform output ci_access_client_id` |
+   | `CF_ACCESS_CLIENT_SECRET` | `terraform output -raw ci_access_client_secret` |
+   | `APP_DOMAIN` | The app's hostname, without `https://`. Used only for the final `/healthz` check |
 
 The app's own credentials (Instagram, Telegram, kalender.digital, Basic auth)
 live only in Coolify's environment tab, not in GitHub.
@@ -267,7 +314,8 @@ one. A failed health check leaves the old version serving.
 Deploy) or from a laptop:
 
 ```sh
-COOLIFY_URL=… COOLIFY_TOKEN=… COOLIFY_APP_UUID=… scripts/coolify-deploy.sh <commit sha>
+COOLIFY_URL=… COOLIFY_TOKEN=… COOLIFY_APP_UUID=… \
+CF_ACCESS_CLIENT_ID=… CF_ACCESS_CLIENT_SECRET=… scripts/coolify-deploy.sh <commit sha>
 ```
 
 That rolls back code, not schema: migrations are not downgraded. Keep
@@ -275,13 +323,40 @@ migrations additive so the previous image still runs against the new schema.
 
 ### Operational notes
 
-- **TLS** is Coolify's proxy (Traefik) with Let's Encrypt. That is what makes
-  `IG_REDIRECT_URI` a valid public HTTPS URL and stops Basic auth from
-  travelling in cleartext.
+- **Errors go to Sentry** once `SENTRY_DSN` is set in Coolify's environment
+  tab (optionally `SENTRY_ENVIRONMENT`, `SENTRY_TRACES_SAMPLE_RATE`). The
+  release is the commit sha, baked into the image by CI. Failed syncs and
+  deliveries show up too, since they are logged as errors. Tokens in URLs are
+  redacted before anything is sent.
+- **TLS** is Cloudflare's edge plus the tunnel; Traefik in Coolify only sees
+  plain http. That is what makes `IG_REDIRECT_URI` a valid public HTTPS URL.
+  Because the Coolify domains are `http://`, a Terraform-managed redirect rule
+  sends plain-http visitors of the app and dashboard to `https`, so Basic auth
+  never travels in cleartext. It is per hostname: the zone also hosts other
+  sites.
 - **Request timeouts:** Traefik v3 cuts off reading a request body after 60s
   by default. If a large video upload from a slow phone connection fails,
-  raise `entryPoints.https.transport.respondingTimeouts.readTimeout` in
-  *Servers → Proxy*.
+  raise `entryPoints.http.transport.respondingTimeouts.readTimeout` in
+  *Servers → Proxy* (it is `http`, not `https`, because TLS no longer ends at
+  Traefik).
+- **Cloudflare's free plan rejects request bodies over 100 MB**, so a very
+  large video upload in the compose wizard fails at the edge, whatever the app
+  allows.
+- **Bot Fight Mode must stay off** for this zone: it cannot be skipped on the
+  free plan, and it blocks Meta's image fetcher. A Terraform rule skips the
+  other bot checks for `/media/` and `/healthz`. Verify with the "prove a
+  tunnel is good enough for Meta" check in
+  [`docs/development.md`](docs/development.md) after changing Cloudflare
+  settings.
+- **The Proxmox UI is never on the tunnel.** Only the app and the Coolify
+  dashboard are.
+- **Uptime follows home power and internet.** While the box is down the app is
+  unreachable; the poller catches up afterwards.
+- **Cloud-init runs once.** Editing `infra/cloud-init/` later does nothing to
+  the running VM (`ignore_changes` on the VM), and `prevent_destroy` stops
+  Terraform from deleting the machine that holds the database. Change a
+  running VM by hand; rebuilding is a deliberate edit of those lifecycle
+  lines.
 - **Postgres is never public.** The app reaches it over Coolify's internal
   Docker network; leave "Make it publicly available" off.
 - **Post images live in Postgres.** Instagram's CDN links expire, so each sync
@@ -289,9 +364,11 @@ migrations additive so the previous image still runs against the new schema.
   fresh, and the UI serves them from `/posts/<id>/media/<n>`. A few hundred KB
   per image; it grows with the number of posts, not with time. The app
   container itself holds no state and needs no volume.
-- **Backups** are Coolify's scheduled `pg_dump`s of the database resource.
-  Without an S3 destination they stay on the same server, which covers a bad
-  migration, not a lost server.
+- **Backups** come in two layers. Coolify's scheduled `pg_dump`s go off-site to
+  the R2 bucket; restore a database from those. Proxmox VM backups
+  (vzdump or PBS, set up on the Proxmox side) restore the whole machine, but a
+  VM snapshot is only crash-consistent for Postgres, so it is not what you
+  restore a database from.
 - **`--workers 1` is still load-bearing.** The poller runs inside the app
   process, so a second worker means two pollers racing. The brief overlap
   during a rolling update is harmless, because an interval job first fires one

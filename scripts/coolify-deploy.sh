@@ -4,6 +4,11 @@
 #   COOLIFY_URL=https://coolify.example.org COOLIFY_TOKEN=... COOLIFY_APP_UUID=... \
 #     scripts/coolify-deploy.sh <image tag>
 #
+# The dashboard (and so the API) sits behind Cloudflare Access. Set
+# CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET (the service token from
+# `terraform output` in infra/terraform) and every request carries them; leave
+# both unset for a Coolify that is not behind Access.
+#
 # What the `deploy` job in .github/workflows/ci-cd.yml runs; works the same from
 # a laptop, e.g. to roll back to an earlier commit's tag. The tag is the commit
 # SHA the `build` job pushed to GHCR. Exits non-zero unless Coolify reports the
@@ -17,11 +22,20 @@ tag=${1:?usage: coolify-deploy.sh <image tag>}
 
 api="${COOLIFY_URL%/}/api/v1"
 
+# Extra curl arguments, only filled when Access credentials are given. An array
+# keeps each header in one piece; the ${access[@]+...} form is safe when empty.
+access=()
+if [ -n "${CF_ACCESS_CLIENT_ID:-}" ] && [ -n "${CF_ACCESS_CLIENT_SECRET:-}" ]; then
+  access=(-H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID"
+    -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET")
+fi
+
 call() {
   local method=$1 path=$2
   shift 2
   curl -fsS --max-time 30 -X "$method" "$api$path" \
-    -H "Authorization: Bearer $COOLIFY_TOKEN" -H "Accept: application/json" "$@"
+    -H "Authorization: Bearer $COOLIFY_TOKEN" -H "Accept: application/json" \
+    ${access[@]+"${access[@]}"} "$@"
 }
 
 echo "setting image tag $tag"

@@ -13,7 +13,7 @@ wired today; the model no longer assumes it.
 | Tokens | Long-lived (60d); `Token.needs_refresh()` says refresh after **50 days** or within 7 of expiry | #1 cause of silent death. Refresh rides the sync cadence (see sharp edges). |
 | New posts | **Poll** `GET /{ig-user-id}/media` | IG webhooks are unreliable for new media |
 | Storage | **Postgres** (SQLAlchemy 2.0 async + Alembic + asyncpg) | Already running compose. Backup = Coolify's scheduled `pg_dump` of the database resource. |
-| Hosting | **Coolify** on one server: Postgres as a Coolify-managed database, the app as a *Docker Image* application pulling `runtime` from GHCR; CI sets the image tag to the commit SHA and deploys through the Coolify API (`scripts/coolify-deploy.sh`) | TLS, rolling updates behind a health check, backups and a UI for env and logs without hand-maintained host config; the tag is the commit, so rollback is "deploy an older SHA" |
+| Hosting | A **Proxmox** box at home: one Debian VM running **Coolify**, which runs Postgres as a Coolify-managed database and the app as a *Docker Image* application pulling `runtime` from GHCR. A **Cloudflare Tunnel** is the only way in (no open ports at home); the Coolify dashboard sits behind **Cloudflare Access**. The VM, tunnel, DNS, Access and the backup bucket are Terraform + cloud-init under `infra/`; CI sets the image tag to the commit SHA and deploys through the Coolify API (`scripts/coolify-deploy.sh`, with an Access service token) | Rolling updates behind a health check, backups and a UI for env and logs without hand-maintained host config; nothing at home is reachable from the internet; the tag is the commit, so rollback is "deploy an older SHA". Coolify's own settings (projects, env values, the S3 backup destination) stay manual, see the readme |
 | Exactly-once | one `deliveries` row per `(post_id, sink, address)`, PK-enforced; claimed with `INSERT … ON CONFLICT DO NOTHING … RETURNING` | The core invariant; retry-safe by construction |
 | Retries | `Delivery` owns it: a FAILED row is retried on every poll until `Delivery.MAX_ATTEMPTS` (5); manual resend bypasses the cap | Policy lives on the entity, so SQL and the test fakes can't drift |
 | Approval (Freigabe) | Per-channel `channel_settings.auto_publish`, default **off**; a fresh delivery or a submitted draft queues in `REVIEW` unless every channel it targets is already switched on | Owner wants "Freigabe first": nothing goes out unreviewed until a channel is explicitly opted in |
@@ -23,10 +23,11 @@ wired today; the model no longer assumes it.
 | Media | Download to tempfile → hand `MediaFile(item, path)` to the sink → delete | IG CDN URLs are short-lived; a file path is the one payload every sink can use |
 | Routing | `TELEGRAM_CHAT_IDS` env var → `Destination("telegram", chat_id)` list built in the composition root | Edited twice a year, no CRUD needed |
 | UI | Jinja served by FastAPI, German, matching the diffus.space design system, plus a Vite/TypeScript/htmx build (`web/`) for progressive-enhancement client code; on a ≥ 900 px viewport, detail pages (a post, an event, a wizard) open as a `<dialog>` modal instead of a full navigation; the shell (`base.html`) is a left sidebar at ≥ 900 px and, below that, a one-row top bar plus a bottom tab bar, so the nav never wraps or clips (round 6) | Every URL still works as a full page (phones, no-JS, crawlers); the modal is additive, not a second UI |
-| Auth | `HTTPBasic` + `secrets.compare_digest`, creds from env | Needs TLS in front (Coolify's proxy) — required anyway for the OAuth redirect URI |
+| Auth | `HTTPBasic` + `secrets.compare_digest`, creds from env | Needs TLS in front (Cloudflare's edge, through the tunnel) — required anyway for the OAuth redirect URI |
 | Wizard entry (round 4, entry point simplified round 5) | **One** three-step flow — Termin → Post → Vorschau — at `/neu` → `/posts/new` → its preview, each of the first two steps skippable, behind one entry point everywhere: the shell's own cta button (sidebar on desktop, top bar on phones) ("Neues Event erstellen" / "Neuer Post"), replacing round 4's own "+ Neu" nav link and every in-page "Neu" button; the event step writes through `EventDirectory.create_event` rather than the calendar owning its own form | Replaces two separate flows ("Termin anlegen" / "Post erstellen") that did the same two things in a different order; owner: "one wizard, one modal", then round 5: "the neu button should be in the header" |
 | Freigabe history | append-only `review_log`, one row per human decision or auto-publish | the queue only shows what is still open; the owner wants to see what happened |
 | Fun layer (round 7) | Freigabe reaction-time/inbox-zero stats computed from `review_log` via `queued_at` (`domain/stats.py::review_stats`, in-memory, no new table); per-job streaks (`shared/automation.py::Streak`) kept in memory like `runs`, reset on restart; the index heatmap and "Post Nummer N" milestone read straight from `posts` (`posted_at_since`); the site-wide blurred backdrop is served by its own route, `GET /backdrop` | make the site fun without a bigger data model: everything here is derived from data already stored, or is deliberately ephemeral (streaks) |
+| Error reporting | **Sentry**, backend only, off unless `SENTRY_DSN` is set; started in `create_app` before the routers (its FastAPI integration wraps routes as they are built), from its own `SentrySettings` so `import diffus.app` still needs no .env. Reports unhandled request errors plus every `logger.exception`/`logger.error` (how the scheduler's self-catching jobs surface). Every event, transaction and breadcrumb goes through `redact`; no local variables in frames | the adapters' credentials ride in request URLs, which httpx quotes into exceptions and breadcrumbs; a frame's `self`/`url` can hold a token under a name Sentry's own scrubber doesn't know |
 | Installable (PWA) | a web app manifest + icons (`web/public/`), the head tags in `base.html`, and a service worker (`web/src/sw.ts`, served at `/sw.js` by `app.py`'s public router) that caches **only `/static/`** — hashed files cache-first, the rest network-first — and answers a *failed* `GET` page load with the static German offline page `web/public/offline.html`; **pages are never cached** (they sit behind Basic auth) and nothing outside `/static/` is intercepted | the reviewers open this on their phones: a home-screen icon, its own window and a real offline page make it feel like an app without a second UI — and the cache rule is main.ts's "never snapshot a Basic-auth page" rule, applied to the worker too |
 
 ## Domain model
@@ -294,7 +295,8 @@ src/diffus/
   app.py                         # composition root: lifespan builds the graph, starts the scheduler;
                                   # also defines public_router (/healthz, /sw.js, /media/drafts/...)
   shared/                        # what every bounded context uses; contexts never import each other
-    config.py                    # pydantic-settings, env-only; read by the composition root and alembic
+    config.py                    # pydantic-settings, env-only; read by the composition root and alembic;
+                                  #   SentrySettings: the all-defaults subset read at import time
     dates.py                     # MONTHS/WEEKDAYS — the one shared/ module calendar/application may import
     automation.py                # JobRun/JobStatus/Automation/RUN_HISTORY/Streak — context-neutral
                                   #   shape of "what runs on a timer", for /einstellungen; a value-only
@@ -302,6 +304,7 @@ src/diffus/
                                   #   (round 7) tracks consecutive error-free runs, in memory like `runs`
     db/base.py                   # `Base(DeclarativeBase)`; every context's models inherit from it
     db/session.py                # engine / session factory construction
+    sentry.py                    # init_sentry() (no DSN = off) + scrub(): redact() over every outgoing event
     scheduler.py                 # start_scheduler(): one AsyncIOScheduler interval job; next_run_time()
                                   #   reads the interval job's own next fire time, for /einstellungen
     presentation/
@@ -413,6 +416,14 @@ src/diffus/
 alembic/                          # 0001 initial, 0002 previews, 0003 destinations and sources, 0004 calendar,
                                    #   0005 drafts and scopes, 0006 Freigabe and channels, 0007 review log,
                                    #   0008 queue timestamps
+infra/
+  terraform/                      # one root module: Cloudflare (tunnel, DNS, Access, redirect and bot-check
+                                   #   rulesets, R2 backup bucket) and the Proxmox VM; state in an R2 bucket;
+                                   #   applied by hand, CI only runs fmt/validate
+  cloud-init/user-data.yaml.tftpl # first-boot config of the VM: ssh hardening, cloudflared, Coolify installer
+scripts/
+  coolify-deploy.sh               # CI's deploy step (set image tag, deploy, wait); also used for rollback
+  dev-tunnel.sh, make-icons.py    # dev tooling, see docs/development.md
 ```
 
 ## Conventions

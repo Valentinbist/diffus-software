@@ -1,9 +1,12 @@
 .env
 .venv/
-infra/ansible/inventory.ini
 __pycache__/
 *.pyc
 .pytest_cache/
 *.egg-info/
 web/node_modules/
 src/diffus/shared/presentation/static/dist/
+infra/terraform/.terraform/
+*.tfstate
+*.tfstate.*
+infra/terraform/terraform.tfvars
