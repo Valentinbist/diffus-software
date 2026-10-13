@@ -198,20 +198,19 @@ template, the scheduler bootstrap. See
 Production runs on a Proxmox box at home: one Debian VM (made by Terraform and
 cloud-init) running [Coolify](https://coolify.io), which runs the app and its
 Postgres. A Cloudflare Tunnel is the only way in, so nothing is open at home.
-GitHub Actions tests the code and builds the image; Coolify runs it and backs up
-the database.
+GitHub Actions tests the code and builds the image; Coolify runs it. There are
+no backups: if the VM dies, the data goes with it.
 
 ```text
 .github/workflows/ci-cd.yml        check + infra -> build (image to GHCR) -> deploy (via the Coolify API)
 scripts/coolify-deploy.sh          the deploy step: set image tag, deploy, wait for the result
-infra/terraform/                   Cloudflare (tunnel, DNS, Access, rulesets, R2 bucket) and the Proxmox VM
+infra/terraform/                   Cloudflare (tunnel, DNS, Access, rulesets) and the Proxmox VM
 infra/cloud-init/                  first-boot config of the VM: ssh, cloudflared, Coolify installer
 ```
 
 Two Coolify resources, both in one project and on the same server:
 
-- **PostgreSQL**: a Coolify-managed database, so it gets Coolify's scheduled
-  backups (Backups tab, to S3).
+- **PostgreSQL**: a Coolify-managed database.
 - **The app**: an application with the *Docker Image* build pack, pulling
   `ghcr.io/valentinbist/diffus-software`. CI sets the tag to the commit SHA on
   every deploy, so Coolify always shows which commit is running.
@@ -224,10 +223,8 @@ pass (login by email code), plus CI with a service token.
 
 1. **Accounts and tokens.** Terraform is applied by hand from a laptop
    (`terraform` 1.14, see `.tool-versions`); CI only checks its syntax.
-   - Cloudflare: create an R2 bucket for the Terraform state by hand (it
-     cannot hold its own state otherwise), an R2 API token for it, and an API
-     token for Terraform with: Account → Cloudflare Tunnel Edit, Access: Apps
-     and Policies Edit, Access: Service Tokens Edit, Workers R2 Storage Edit;
+   - Cloudflare: an API token for Terraform with: Account → Cloudflare Tunnel
+     Edit, Access: Apps and Policies Edit, Access: Service Tokens Edit;
      Zone → DNS Edit, Zone WAF Edit, Single Redirect Edit.
    - Proxmox: an API token (*Datacenter → Permissions → API Tokens*) with rights
      on the node and the datastores, content type **Snippets** and **Import**
@@ -238,17 +235,17 @@ pass (login by email code), plus CI with a service token.
 
    ```sh
    cd infra/terraform
-   cp backend.hcl.example backend.hcl            # bucket + R2 endpoint
    cp terraform.tfvars.example terraform.tfvars  # hostnames, node, ssh keys, ...
-   export AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=…   # the R2 token for the state
    export CLOUDFLARE_API_TOKEN=… PROXMOX_VE_ENDPOINT=… PROXMOX_VE_API_TOKEN=…
-   terraform init -backend-config=backend.hcl
+   terraform init
    terraform apply
    ```
 
    This creates the tunnel, DNS records, the Access application, the zone
-   rules, the backup bucket and the VM. The VM installs cloudflared and Coolify
-   on first boot; give it a few minutes.
+   rules and the VM. The VM installs cloudflared and Coolify on first boot;
+   give it a few minutes. The state stays in `infra/terraform/terraform.tfstate`
+   on that laptop (gitignored, it holds the tunnel secret). Losing it is not
+   fatal: import the resources again, or delete and re-create them.
 3. **First boot.** Open `http://<vm ip>:8000` (`terraform output vm_ipv4`) from
    the LAN **immediately** and register: the first visitor becomes Coolify's
    admin. Then *Settings*: set the instance domain to `http://<coolify hostname>`
@@ -259,12 +256,7 @@ pass (login by email code), plus CI with a service token.
    `read:packages`.
 5. **Database.** *+ New → Database → PostgreSQL 17*, then start it. Copy its
    **internal** Postgres URL and change the scheme to `postgresql+asyncpg://`.
-   That is `DATABASE_URL`. Leave "Make it publicly available" off. For
-   backups, add an S3 destination (*Storages*): the R2 bucket from
-   `terraform output backup_bucket`, endpoint
-   `https://<account id>.r2.cloudflarestorage.com`, and an R2 API key made by
-   hand (*R2 → Manage API tokens*, read and write on that bucket). Then add a
-   schedule on the database's Backups tab.
+   That is `DATABASE_URL`. Leave "Make it publicly available" off.
 6. **App.** *+ New → Docker Image*, image `ghcr.io/valentinbist/diffus-software`,
    tag `latest` for the first start. Then set:
 
@@ -364,11 +356,9 @@ migrations additive so the previous image still runs against the new schema.
   fresh, and the UI serves them from `/posts/<id>/media/<n>`. A few hundred KB
   per image; it grows with the number of posts, not with time. The app
   container itself holds no state and needs no volume.
-- **Backups** come in two layers. Coolify's scheduled `pg_dump`s go off-site to
-  the R2 bucket; restore a database from those. Proxmox VM backups
-  (vzdump or PBS, set up on the Proxmox side) restore the whole machine, but a
-  VM snapshot is only crash-consistent for Postgres, so it is not what you
-  restore a database from.
+- **No backups**, on purpose. Losing the VM loses the posts, drafts, review
+  log and tokens; Instagram has to be reconnected after a rebuild. Coolify's
+  database Backups tab is the place to start if that changes.
 - **`--workers 1` is still load-bearing.** The poller runs inside the app
   process, so a second worker means two pollers racing. The brief overlap
   during a rolling update is harmless, because an interval job first fires one
