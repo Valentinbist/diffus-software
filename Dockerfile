@@ -10,7 +10,7 @@
 #
 # Bump the two pins together with .tool-versions / .python-version.
 
-FROM ghcr.io/astral-sh/uv:0.11.33 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.8 AS uv
 
 FROM node:22-alpine AS web
 WORKDIR /build/web
@@ -19,7 +19,7 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM python:3.14-slim-trixie AS base
+FROM python:3.15-slim-trixie AS base
 # Match the host user on Linux so bind mounts in dev are writable; harmless elsewhere.
 ARG UID=1000
 ARG GID=1000
